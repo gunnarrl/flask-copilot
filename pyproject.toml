@@ -36,6 +36,7 @@ include = ["charge_backend*"]
 # This creates the console script
 [project.scripts]
 flask-copilot-install = "charge_backend.install:main"
+flask-copilot = "charge_backend.cli:main"
 
 [project.optional-dependencies]
 # This is the manually identified set of necessary tools for AiZynthFinder 4.4.0 to work with a --no-deps install
