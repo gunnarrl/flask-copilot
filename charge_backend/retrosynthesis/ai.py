@@ -4,6 +4,7 @@ from fastapi import WebSocket
 from lc_conductor.callback_logger import CallbackLogger
 from typing import Awaitable, Callable, Optional
 
+from charge.clients.agent import Agent
 from charge_backend.backend_helper_funcs import (
     CallbackHandler,
     highlight_node,
@@ -36,10 +37,10 @@ from lc_conductor import ToolRuntime
 
 RETROSYNTH_UNCONSTRAINED_USER_PROMPT_TEMPLATE = (
     "Provide a retrosynthetic pathway for the target molecule `{target_molecule}`. "
-    + "If there are `*`, the `*` indicate the boundaries of the polymer repeat unit."
+    + "If there are `*`, the `*` indicate the boundaries of the polymer repeat unit. "
     + "The pathway should be provided as a tuple of reactants as SMILES and the product as SMILES. "
     + "Perform only single step retrosynthesis. Make sure the SMILES strings are valid. "
-    + "Use tools to verify the SMILES strings and diagnose any issues that arise."
+    + "Use tools to verify the SMILES strings and diagnose any issues that arise. "
     + "Do the evaluation step-by-step. Propose a retrosynthetic step, then evaluate it. "
     + "If the evaluation fails, propose a new retrosynthetic step and evaluate it again. "
     + "Find the best possible retrosynthetic step, and use tools to see if the "
@@ -48,7 +49,7 @@ RETROSYNTH_UNCONSTRAINED_USER_PROMPT_TEMPLATE = (
 
 RETROSYNTH_CONSTRAINED_USER_PROMPT_TEMPLATE = (
     "Provide a retrosynthetic pathway for the target molecule `{target_molecule}`. "
-    + "If there are `*`, the `*` indicate the boundaries of the polymer repeat unit."
+    + "If there are `*`, the `*` indicate the boundaries of the polymer repeat unit. "
     + "The pathway should be provided as a tuple of reactants as SMILES and the product as SMILES. "
     + "Perform only single step retrosynthesis. Make sure the SMILES strings are valid. "
     + "Use tools to verify the SMILES strings and diagnose any issues that arise. "
@@ -56,6 +57,51 @@ RETROSYNTH_CONSTRAINED_USER_PROMPT_TEMPLATE = (
     + "Do the evaluation step-by-step. Propose a retrosynthetic step, then evaluate it. "
     + "If the evaluation fails, propose a new retrosynthetic step and evaluate it again. "
 )
+
+
+async def retrosynthesis(
+    target: str,
+    query: Optional[str],
+    constraint: Optional[str],
+    tool_runtime: ToolRuntime,
+    runner: Agent,
+    attachments: Optional[list[dict[str, object]]] = None,
+    before_run: Optional[Callable[[Agent], Awaitable[None]]] = None,
+):
+    """Run template-free retrosynthesis without websocket or graph update logic."""
+    if constraint:
+        user_prompt = RETROSYNTH_CONSTRAINED_USER_PROMPT_TEMPLATE.format(
+            target_molecule=target,
+            constrained_reactant=constraint,
+        )
+    else:
+        user_prompt = RETROSYNTH_UNCONSTRAINED_USER_PROMPT_TEMPLATE.format(
+            target_molecule=target
+        )
+
+    user_prompt += "\nDouble check the reactants with the `predict_reaction_products` tool to see if the products are equivalent to the given product. If there is any inconsistency (canonicalize both sides of the equation first), log it and try some other set of reactants."
+    if query is not None:
+        user_prompt += (
+            f"\n\nAdditionally, adhere to the following requirements:\n{query}\n\n"
+        )
+
+    retro_task = RetrosynthesisTask(
+        user_prompt=user_prompt,
+        attachments=attachments or [],
+        **tool_runtime.task_kwargs(),
+    )
+    runner.task = retro_task
+
+    if os.getenv("CHARGE_DISABLE_OUTPUT_VALIDATION", "0") == "1":
+        retro_task.structured_output_schema = None
+
+    # for prompt debugging in web ui
+    if before_run is not None:
+        await before_run(runner)
+
+    output = await runner.run()
+    result = ReactionOutputSchema.model_validate_json(output)
+    return result, retro_task, output
 
 
 async def ai_based_retrosynthesis(
@@ -106,31 +152,7 @@ async def ai_based_retrosynthesis(
         callback_handler.agent_key = agent_key
         callback_handler.on_agent_update = history_callback
 
-    if constraint:
-        user_prompt = RETROSYNTH_CONSTRAINED_USER_PROMPT_TEMPLATE.format(
-            target_molecule=current_node.smiles,
-            constrained_reactant=constraint,
-        )
-    else:
-        user_prompt = RETROSYNTH_UNCONSTRAINED_USER_PROMPT_TEMPLATE.format(
-            target_molecule=current_node.smiles
-        )
-
-    user_prompt += "\nDouble check the reactants with the `predict_reaction_products` tool to see if the products are equivalent to the given product. If there is any inconsistency (canonicalize both sides of the equation first), log it and try some other set of reactants."
-    if query is not None:
-        user_prompt += (
-            f"\n\nAdditionally, adhere to the following requirements:\n{query}\n\n"
-        )
-
-    retro_task = RetrosynthesisTask(
-        user_prompt=user_prompt,
-        attachments=attachments or [],
-        **tool_runtime.task_kwargs(),
-    )
-    runner.task = retro_task
-
     if os.getenv("CHARGE_DISABLE_OUTPUT_VALIDATION", "0") == "1":
-        retro_task.structured_output_schema = None
         await clogger.warning(
             "Structure validation disabled for RetrosynthesisTask output schema."
         )
@@ -141,20 +163,22 @@ async def ai_based_retrosynthesis(
 
     # Run task
     await highlight_node(current_node, websocket, True)
-    if run_settings.prompt_debugging:
+
+    async def debug_runner_prompt(runner: Agent):
         await debug_prompt(runner, websocket)
-    output = await runner.run()
+
+    result, retro_task, output = await retrosynthesis(
+        target=current_node.smiles,
+        query=query,
+        constraint=constraint,
+        tool_runtime=tool_runtime,
+        runner=runner,
+        attachments=attachments,
+        before_run=debug_runner_prompt if run_settings.prompt_debugging else None,
+    )
     if callback_handler is not None:
         await callback_handler.drain()
     experiment.add_to_context(runner, retro_task, output)
-
-    if os.getenv("CHARGE_DISABLE_OUTPUT_VALIDATION", "0") == "1":
-        await clogger.warning(
-            "Structure validation disabled for RetrosynthesisTask output schema."
-            "Returning text results without validation first before post-processing."
-        )
-
-    result = ReactionOutputSchema.model_validate_json(output)
 
     await highlight_node(current_node, websocket, False)
 
