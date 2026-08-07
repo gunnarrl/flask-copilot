@@ -26,7 +26,9 @@ from charge_backend.retrosynthesis.template import (
 from charge_backend.moleculedb.purchasable import is_purchasable
 from charge_backend.retrosynthesis.mapping import build_mapped_reaction_dict_or_none
 from charge_backend.retrosynthesis.database import find_exact_reactions
-from charge_backend.retrosynthesis.functional_groups import functional_groups_from_smiles
+from charge_backend.retrosynthesis.functional_groups import (
+    functional_groups_from_smiles,
+)
 
 from charge_backend.retrosynthesis.retrosynthesis_task import (
     TemplateFreeRetrosynthesisTask as RetrosynthesisTask,
@@ -34,7 +36,6 @@ from charge_backend.retrosynthesis.retrosynthesis_task import (
 )
 
 from lc_conductor import ToolRuntime
-
 
 RETROSYNTH_UNCONSTRAINED_USER_PROMPT_TEMPLATE = (
     "Provide a retrosynthetic pathway for the target molecule `{target_molecule}`. "
@@ -91,6 +92,7 @@ Ranking criteria:
 - one-step feasibility
 """
 
+
 async def ai_based_retrosynthesis(
     node_id: str,
     query: Optional[str],
@@ -145,14 +147,14 @@ async def ai_based_retrosynthesis(
     user_prompt = RETROSYNTH_PROMPT_TEMPLATE.format(
         preferred_name=preferred_name,
         smiles=current_node.smiles,
-        fgs=", ".join(functional_groups) if functional_groups else "None"
+        fgs=", ".join(functional_groups) if functional_groups else "None",
     )
 
     if constraint:
         user_prompt += (
-          f"\n\nConstraint - The following reactants cannot be used in the retrosynthetic step: "
-          f"{constraint}."
-      )
+            f"\n\nConstraint - The following reactants cannot be used in the retrosynthetic step: "
+            f"{constraint}."
+        )
 
     if query is not None:
         user_prompt += (

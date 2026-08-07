@@ -83,7 +83,7 @@ def ai_preferred_name_lookup(inchi):
 def smiles_preferred_name(smiles):
     if Chem is None:
         return None
-    
+
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:  # Invalid SMILES
         return None

@@ -12,13 +12,11 @@ FUNCTIONAL_GROUP_SMARTS = {
     "amide": "C(=O)N",
     "acyl halide": "C(=O)[F,Cl,Br,I]",
     "anhydride": "C(=O)OC(=O)",
-
     # Alcohols / ethers
     "alcohol": "[OX2H][CX4]",
     "phenol": "[OX2H][c]",
     "ether": "[#6]-O-[#6]",
     "epoxide": "[OX2r3]1CC1",
-
     # Nitrogen
     "amine": "[NX3;H2,H1,H0;!$(NC=O)]",
     "imine": "[CX3]=[NX2]",
@@ -29,7 +27,6 @@ FUNCTIONAL_GROUP_SMARTS = {
     "isothiocyanate": "N=C=S",
     "urea": "N-C(=O)-N",
     "carbamate": "O-C(=O)-N",
-
     # Sulfur
     "thiol": "[SX2H]",
     "thioether": "[#6]-S-[#6]",
@@ -37,20 +34,15 @@ FUNCTIONAL_GROUP_SMARTS = {
     "sulfone": "[SX4](=O)(=O)",
     "sulfonamide": "S(=O)(=O)N",
     "sulfonic acid": "S(=O)(=O)[OX2H]",
-
     # Phosphorus
     "phosphate": "P(=O)(O)(O)",
-
     # Unsaturation
     "alkene": "C=C",
     "alkyne": "C#C",
-
     # Rings
     "aromatic ring": "a1aaaaa1",
-
     # Halogens
     "organohalide": "[#6][F,Cl,Br,I]",
-
     # Hydrocarbon
     "alkyl substituent": "[CX4][a]",
 }
