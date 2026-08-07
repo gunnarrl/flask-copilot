@@ -79,6 +79,7 @@ def ai_preferred_name_lookup(inchi):
 
     return row[0].strip() if row and row[0] and row[0].strip() else None
 
+
 def smiles_preferred_name(smiles):
     if Chem is None:
         return None
@@ -89,6 +90,7 @@ def smiles_preferred_name(smiles):
 
     inchi = str(Chem.MolToInchi(mol))
     return ai_preferred_name_lookup(inchi)
+
 
 def smiles_to_html(
     smiles: str,
