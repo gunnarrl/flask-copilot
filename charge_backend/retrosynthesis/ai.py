@@ -17,6 +17,7 @@ from charge_backend.prompt_debugger import debug_prompt
 from charge_backend.flask_experiment import FlaskExperiment, GraphContext
 from charge_backend.moleculedb.molecule_naming import (
     smiles_to_html,
+    smiles_preferred_name,
 )
 from charge_backend.retrosynthesis.template import (
     generate_nodes_for_molecular_graph,
@@ -25,6 +26,7 @@ from charge_backend.retrosynthesis.template import (
 from charge_backend.moleculedb.purchasable import is_purchasable
 from charge_backend.retrosynthesis.mapping import build_mapped_reaction_dict_or_none
 from charge_backend.retrosynthesis.database import find_exact_reactions
+from charge_backend.retrosynthesis.functional_groups import functional_groups_from_smiles
 
 from charge_backend.retrosynthesis.retrosynthesis_task import (
     TemplateFreeRetrosynthesisTask as RetrosynthesisTask,
@@ -57,6 +59,37 @@ RETROSYNTH_CONSTRAINED_USER_PROMPT_TEMPLATE = (
     + "If the evaluation fails, propose a new retrosynthetic step and evaluate it again. "
 )
 
+RETROSYNTH_PROMPT_TEMPLATE = """You are a chemistry retrosynthesis assistant. Perform single-step retrosynthesis only.
+
+Target:
+- Preferred Name: {preferred_name}
+- SMILES: `{smiles}`
+- Functional Groups: {fgs}
+- Polymer rule: if `*` appears, it marks polymer repeat-unit boundaries
+
+Task:
+Find the best one-step retrosynthetic path to the target. Use available tools to verify each candidate; if a required tool is unavailable, perform the
+same check by chemical reasoning.
+
+Requirements:
+1. Identify the key bond formation, functional group transformation, or disconnection that most directly explains the target.
+2. Propose candidate reactants for a single retrosynthetic step.
+3. Verify that each proposed reactant SMILES is syntactically valid.
+4. Check whether the proposed reactants are chemically plausible and reasonably synthesizable.
+5. Evaluate the implied forward reaction. The reactants should regenerate the target in one step without adding, deleting, or rearranging unrelated atoms.
+6. If `predict_reaction_products` is available, use it to predict products from the proposed reactants, then canonicalize and compare the predicted
+product with the target. If there is any inconsistency log it and try some other set of reactants.
+7. If prediction tools are unavailable, perform the same forward-product equivalence check by chemical reasoning.
+8. If a candidate fails validation or there is any inconsistency, diagnose the issue, log it, and try another candidate.
+9. Choose the best validated step.
+10. Return the selected reactants and regenerated product as SMILES.
+
+Ranking criteria:
+- exact or near-exact forward-product equivalence to target
+- chemical plausibility
+- reactants are buyable, or can be reduced to buyable precursors in few plausible steps
+- one-step feasibility
+"""
 
 async def ai_based_retrosynthesis(
     node_id: str,
@@ -106,17 +139,21 @@ async def ai_based_retrosynthesis(
         callback_handler.agent_key = agent_key
         callback_handler.on_agent_update = history_callback
 
-    if constraint:
-        user_prompt = RETROSYNTH_CONSTRAINED_USER_PROMPT_TEMPLATE.format(
-            target_molecule=current_node.smiles,
-            constrained_reactant=constraint,
-        )
-    else:
-        user_prompt = RETROSYNTH_UNCONSTRAINED_USER_PROMPT_TEMPLATE.format(
-            target_molecule=current_node.smiles
-        )
+    preferred_name = smiles_preferred_name(current_node.smiles)
+    functional_groups = functional_groups_from_smiles(current_node.smiles)
 
-    user_prompt += "\nDouble check the reactants with the `predict_reaction_products` tool to see if the products are equivalent to the given product. If there is any inconsistency (canonicalize both sides of the equation first), log it and try some other set of reactants."
+    user_prompt = RETROSYNTH_PROMPT_TEMPLATE.format(
+        preferred_name=preferred_name,
+        smiles=current_node.smiles,
+        fgs=", ".join(functional_groups) if functional_groups else "None"
+    )
+
+    if constraint:
+        user_prompt += (
+          f"\n\nConstraint - The following reactants cannot be used in the retrosynthetic step: "
+          f"{constraint}."
+      )
+
     if query is not None:
         user_prompt += (
             f"\n\nAdditionally, adhere to the following requirements:\n{query}\n\n"
