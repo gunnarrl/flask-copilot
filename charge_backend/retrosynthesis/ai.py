@@ -37,29 +37,6 @@ from charge_backend.retrosynthesis.retrosynthesis_task import (
 
 from lc_conductor import ToolRuntime
 
-RETROSYNTH_UNCONSTRAINED_USER_PROMPT_TEMPLATE = (
-    "Provide a retrosynthetic pathway for the target molecule `{target_molecule}`. "
-    + "If there are `*`, the `*` indicate the boundaries of the polymer repeat unit."
-    + "The pathway should be provided as a tuple of reactants as SMILES and the product as SMILES. "
-    + "Perform only single step retrosynthesis. Make sure the SMILES strings are valid. "
-    + "Use tools to verify the SMILES strings and diagnose any issues that arise."
-    + "Do the evaluation step-by-step. Propose a retrosynthetic step, then evaluate it. "
-    + "If the evaluation fails, propose a new retrosynthetic step and evaluate it again. "
-    + "Find the best possible retrosynthetic step, and use tools to see if the "
-    + "proposed reactants are synthesizable. "
-)
-
-RETROSYNTH_CONSTRAINED_USER_PROMPT_TEMPLATE = (
-    "Provide a retrosynthetic pathway for the target molecule `{target_molecule}`. "
-    + "If there are `*`, the `*` indicate the boundaries of the polymer repeat unit."
-    + "The pathway should be provided as a tuple of reactants as SMILES and the product as SMILES. "
-    + "Perform only single step retrosynthesis. Make sure the SMILES strings are valid. "
-    + "Use tools to verify the SMILES strings and diagnose any issues that arise. "
-    + "The following reactant cannot be used in the retrosynthetic step: {constrained_reactant}. "
-    + "Do the evaluation step-by-step. Propose a retrosynthetic step, then evaluate it. "
-    + "If the evaluation fails, propose a new retrosynthetic step and evaluate it again. "
-)
-
 RETROSYNTH_PROMPT_TEMPLATE = """You are a chemistry retrosynthesis assistant. Perform single-step retrosynthesis only.
 
 Target:
