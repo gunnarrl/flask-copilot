@@ -19,13 +19,16 @@ import re
 import json
 import os
 import requests
-import pandas as pd
+import functools
 
+from charge_backend.moleculedb.purchasable import moldb_connect
 from typing import Literal, TypeAlias
 
 MolNameFormat: TypeAlias = Literal["brand", "iupac", "formula", "smiles"]
 
+_MOLECULE_DATABASE_PATH = os.getenv("FLASK_MOLECULE_DB", "/data/db/molecules.db")
 _DATABASE_PATH = os.getenv("FLASK_INCHI_DB", "/data/inchi_mapping.json")
+MOLDB_CONNECTION = None
 if os.path.exists(_DATABASE_PATH):
     with open(_DATABASE_PATH, "rb") as fp:
         DATABASE = json.load(fp)
@@ -54,6 +57,30 @@ def inchi_lookup(inchi: str, prefer_iupac: bool = False) -> str | None:
     return None
 
 
+@functools.cache
+def ai_preferred_name_lookup(inchi):
+    global MOLDB_CONNECTION
+    if MOLDB_CONNECTION is None:
+        if os.path.exists(_MOLECULE_DATABASE_PATH):
+            MOLDB_CONNECTION = moldb_connect(_MOLECULE_DATABASE_PATH)
+    if MOLDB_CONNECTION is None:
+        return None
+    cursor = MOLDB_CONNECTION.cursor()
+
+    row = cursor.execute(
+        """
+        SELECT n.ai_preferred_name
+        FROM names n
+        JOIN molecules m ON n.molecule_id = m.molecule_id
+        WHERE m.key = ?
+        """,
+        (inchi,),
+    ).fetchone()
+
+    return row[0].strip() if row and row[0] and row[0].strip() else None
+
+
+
 def smiles_to_html(
     smiles: str,
     molecule_name_format: MolNameFormat = "brand",
@@ -67,12 +94,18 @@ def smiles_to_html(
     if mol is None:  # Invalid SMILES
         return smiles
 
-    # First, try to find a canonical or IUPAC name
+    # First, try to find a canonical, IUPAC name
     if molecule_name_format in ("brand", "iupac"):
         inchi = str(Chem.MolToInchi(mol))
         name = inchi_lookup(inchi, molecule_name_format == "iupac")
         if name:
             return name
+
+        # fallback to ai preferred name
+        if molecule_name_format == "brand":
+            name = ai_preferred_name_lookup(inchi)
+            if name:
+                return name
 
     # Otherwise, use RDKit for a general chemical formula
     # Get the formula
