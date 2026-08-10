@@ -108,15 +108,16 @@ def smiles_to_html(
     # First, try to find a canonical, IUPAC name
     if molecule_name_format in ("brand", "iupac"):
         inchi = str(Chem.MolToInchi(mol))
+
+        # default to AI preferred name
+        if molecule_name_format == "brand":
+          name = ai_preferred_name_lookup(inchi)
+          if name:
+              return name
+
         name = inchi_lookup(inchi, molecule_name_format == "iupac")
         if name:
             return name
-
-        # fallback to ai preferred name
-        if molecule_name_format == "brand":
-            name = ai_preferred_name_lookup(inchi)
-            if name:
-                return name
 
     # Otherwise, use RDKit for a general chemical formula
     # Get the formula
