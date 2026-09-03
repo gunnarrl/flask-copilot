@@ -1,7 +1,7 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field
 from fastapi import WebSocket
 import os
-from typing import Annotated, Any, Callable, Literal
+from typing import Annotated, Any, Callable
 
 from charge_backend.flask_experiment import GraphContext
 from lc_conductor.callback_logger import CallbackLogger
@@ -33,8 +33,10 @@ class ReactionDBEntry:
 
     name: str
     text: str
-    components: list[dict[Literal["role", "name", "smiles", "inchi"], str]]
+    components: list[dict[str, Any]]
     reaction_yield: float = -1.0
+    quality_rank: str = "unknown"
+    actions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def generate_hover_info(entry: ReactionDBEntry) -> str:
@@ -149,7 +151,15 @@ def query_reaction_database(
         processed_entries = processed_entries[:top_k]
 
     # Convert to dictionaries and return
-    return [asdict(e) for e in processed_entries]
+    return [
+        {
+            "name": entry.name,
+            "text": entry.text,
+            "components": entry.components,
+            "reaction_yield": entry.reaction_yield,
+        }
+        for entry in processed_entries
+    ]
 
 
 async def find_exact_reactions(

@@ -10,6 +10,7 @@ from charge.tasks.task import Task
 from charge_backend.backend_helper_funcs import Node, Reaction
 from charge_backend.backend_manager import FlaskActionManager
 from charge_backend.flask_experiment import FlaskExperiment, GraphContext
+from charge_backend.retrosynthesis import route_planner
 
 
 class FakeWebSocket:
@@ -114,6 +115,72 @@ def test_get_agent_returns_empty_record_for_missing_agent():
             "modelInfo": {},
         },
     }
+
+
+def make_route_plan(
+    plan_id: str, branch_memory: str | None = None
+) -> route_planner.CandidateRoutePlan:
+    branch_state = None
+    if branch_memory is not None:
+        branch_state = {
+            "agentSessions": {
+                "route-planning:planner": {
+                    "memory": branch_memory,
+                    "modelInfo": {"model": "dummy-model"},
+                }
+            }
+        }
+    return route_planner.CandidateRoutePlan(
+        plan_id=plan_id,
+        plan=route_planner.RoutePlanContent(
+            title="Plan",
+            route_type="template_based",
+            route_strategy="Use the supported route.",
+            route_value="Tests route-planning agent history.",
+            evidence_overview="Template route evidence.",
+            novelty_rationale="Fixture route; no novelty.",
+            procedure_steps=[
+                route_planner.RouteProcedureStep(
+                    step_label="Step 1",
+                    product_smiles="CCO",
+                    precursor_smiles=["CC=O"],
+                    description="Disconnect the target.",
+                    transformation_type="main bond formation",
+                    evidence_level="template",
+                    evidence_basis="Template route evidence.",
+                    source_refs=["Route 1"],
+                    conditions_summary="Template-only; conditions not provided.",
+                    yield_summary="No yield reported.",
+                    confidence="medium",
+                    main_uncertainty="Forward conditions need verification.",
+                )
+            ],
+        ),
+        branch_state=branch_state,
+    )
+
+
+def test_get_agent_returns_route_plan_branch_history():
+    manager = make_manager()
+    branch_memory = (
+        '{"state":{"in_memory":{"messages":[{"role":"user","content":"branch"}]}}}'
+    )
+    manager.experiment.route_planning_result = route_planner.RoutePlanningResult(
+        target_smiles="CCO",
+        candidate_routes=[make_route_plan("plan_1", branch_memory)],
+    )
+
+    asyncio.run(
+        manager.handle_get_agent(
+            {
+                "agentKey": "route-plan:plan_1",
+                "metadata": {"kind": "route-planning", "planId": "plan_1"},
+            }
+        )
+    )
+
+    assert manager.websocket.last_payload["agentKey"] == "route-plan:plan_1"
+    assert manager.websocket.last_payload["agent"]["memory"] == branch_memory
 
 
 def test_get_agent_includes_pending_user_message_from_running_request():

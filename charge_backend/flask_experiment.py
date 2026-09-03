@@ -26,6 +26,7 @@ from charge_backend.backend_helper_funcs import (
     ReactionAlternative,
     calculate_positions,
 )
+from charge_backend.retrosynthesis import route_planner
 
 
 # Formerly RetroSynthesisContext
@@ -299,7 +300,6 @@ class GraphContext(BaseModel):
 
         # Start from a clean slate
         self.reset()
-
         # Short-circuit an empty object.
         if len(data) == 0 or "nodes" not in data:
             return
@@ -362,14 +362,22 @@ class FlaskExperiment(Experiment):
     """Experiment subclass that manages a graph context"""
 
     graph_context: GraphContext
+    route_planning_result: route_planner.RoutePlanningResult | None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.graph_context = GraphContext()
+        self.route_planning_result = None
 
-    def save_state(self) -> dict[str, Any]:
+    def save_state(
+        self, *, include_route_planning_result: bool = True
+    ) -> dict[str, Any]:
         state = super().save_state()
         state["graphContext"] = self.graph_context.save_state()
+        if include_route_planning_result and self.route_planning_result is not None:
+            state["routePlanningResult"] = self.route_planning_result.model_dump(
+                mode="json"
+            )
         return state
 
     def load_state(self, state: dict[str, Any]) -> None:
@@ -386,7 +394,14 @@ class FlaskExperiment(Experiment):
             self.graph_context = GraphContext.model_validate(state.get("graphContext"))
         else:
             self.graph_context.load_state(state)
+        route_planning_result = state.get("routePlanningResult")
+        self.route_planning_result = (
+            route_planner.RoutePlanningResult.model_validate(route_planning_result)
+            if route_planning_result is not None
+            else None
+        )
 
     def reset(self):
         super().reset()
         self.graph_context.reset()
+        self.route_planning_result = None

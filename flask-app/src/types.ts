@@ -133,6 +133,106 @@ export interface OptimizationCustomization {
   depth?: number; // Number of generations/levels to run
 }
 
+export interface RouteProcedureStep {
+  step_label: string;
+  product_smiles: string;
+  precursor_smiles: string[];
+  description: string;
+  transformation_type: string;
+  evidence_level: 'patent' | 'template' | 'tool' | 'proposal';
+  evidence_basis: string;
+  source_refs: string[];
+  conditions_summary: string;
+  yield_summary: string;
+  confidence: 'low' | 'medium' | 'high';
+  main_uncertainty: string;
+}
+
+export interface RouteStep {
+  step_id: string;
+  product_smiles: string;
+  precursor_smiles: string[];
+  canonical_product_smiles?: string | null;
+  canonical_precursor_smiles?: (string | null)[];
+  reaction_smiles?: string | null;
+  rationale?: string | null;
+}
+
+export interface RouteEvaluationFixOption {
+  label: string;
+  description: string;
+  recommended?: boolean;
+}
+
+export interface RouteEvaluationIssue {
+  severity: 'medium' | 'high';
+  step_id?: string | null;
+  reason: string;
+  fix_options: RouteEvaluationFixOption[];
+}
+
+export interface RouteEvaluationWarning {
+  severity: 'low' | 'medium' | 'high';
+  step_id?: string | null;
+  reason: string;
+}
+
+export interface RouteEvaluationOutput {
+  accepted: boolean;
+  summary: string;
+  step_evidence?: Record<string, string>;
+  issues?: RouteEvaluationIssue[];
+  warnings?: RouteEvaluationWarning[];
+  notes?: string[];
+}
+
+export interface RoutePlanContent {
+  title: string;
+  route_type: 'template_based' | 'hybrid' | 'new_proposal';
+  route_strategy: string;
+  route_value: string;
+  evidence_overview: string;
+  novelty_rationale: string;
+  source_route_numbers?: number[];
+  procedure_steps: RouteProcedureStep[];
+  key_disconnections?: string[];
+  proposed_starting_materials?: string[];
+  key_risks?: string[];
+  next_checks?: string[];
+  assumptions?: string[];
+}
+
+export interface CandidateRoutePlan {
+  plan_id?: string | null;
+  plan: RoutePlanContent;
+  route_steps?: RouteStep[];
+  evaluation?: RouteEvaluationOutput | null;
+  needs_user_decision?: boolean;
+  answer?: string;
+}
+
+export interface RoutePlanningResult {
+  target_smiles: string;
+  user_constraints?: string | null;
+  route_context_items?: unknown[];
+  reasoning_summary?: string;
+  candidate_routes: CandidateRoutePlan[];
+  selected_plan_id?: string | null;
+}
+
+export interface RouteEvaluationDecision {
+  result: RoutePlanningResult;
+  plan_id: string;
+  accepted: boolean;
+  needs_user_decision?: boolean;
+  message?: string | null;
+}
+
+export interface GraphContextPayload {
+  node_ids?: Record<string, TreeNode>;
+  edges?: Record<string, Edge>;
+}
+
 export interface ConstraintOption {
   value: string;
   label: string;
@@ -177,6 +277,12 @@ export interface WebSocketMessageToServer {
   alternativeId?: string;
   aiOnly?: boolean;
 
+  // Route planning
+  planId?: string;
+  chatAgentKey?: string;
+  rematerialize?: boolean;
+  selectedFixOptions?: RouteEvaluationFixOption[];
+
   // Prompt debugging
   prompt?: string;
   metadata?: any;
@@ -210,6 +316,13 @@ export interface WebSocketMessage {
   username?: string;
 
   alternatives?: ReactionAlternative[];
+
+  // Route planning
+  result?: RoutePlanningResult;
+  decision?: RouteEvaluationDecision;
+  planId?: string;
+  answer?: string;
+  graphContext?: GraphContextPayload;
 
   // Prompt debugging
   prompt?: string;
@@ -352,6 +465,10 @@ export interface Experiment {
   autoZoom?: boolean;
   sidebarState?: SidebarState;
   pdfReference?: PdfReferenceMetadata | null;
+  routePlanningResult?: RoutePlanningResult | null;
+  activeRoutePlanId?: string | null;
+  selectedRoutePlanId?: string | null;
+  routePlanningGraphVisible?: boolean;
 
   // Experiment state
   experimentContext?: any;

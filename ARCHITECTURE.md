@@ -31,7 +31,7 @@ The action manager delegates generic task execution, tool runtime selection, sav
 
 `charge_backend/backend_helper_funcs.py` defines shared data shapes used in WebSocket payloads, including molecule graph nodes, reactions, alternatives, callbacks, and run settings.
 
-`charge_backend/retrosynthesis/` owns reaction planning. `template.py` wraps AiZynthFinder/template planning, `ai.py` builds ChARGe tasks for AI retrosynthesis, `database.py` queries known reaction data, `alternatives.py` mutates selected reaction alternatives, and `context.py` tracks retrosynthesis state across a run.
+`charge_backend/retrosynthesis/` owns reaction planning. `template.py` wraps AiZynthFinder/template planning, `ai.py` builds ChARGe tasks for AI retrosynthesis, `database.py` queries known reaction data, and `alternatives.py` mutates selected reaction alternatives. `route_planner/` owns route ranking, evidence, summarization, prompt context, planning, evaluation, and branch-state compaction.
 
 `charge_backend/lmo/` owns lead molecule optimization tasks. `lmo_task.py` defines structured output schemas and task prompts; `lmo_charge_backend_funcs.py` turns agent output into graph nodes.
 

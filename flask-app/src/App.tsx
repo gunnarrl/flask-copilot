@@ -24,6 +24,7 @@ import {
   Bug,
   CheckCircle,
   Minus,
+  XCircle,
 } from 'lucide-react';
 import 'recharts';
 import 'react-markdown';
@@ -46,6 +47,10 @@ import {
   OptimizationCustomization,
   PdfReferenceMetadata,
   ReactionAlternative,
+  RouteEvaluationDecision,
+  RouteEvaluationFixOption,
+  RouteEvaluationIssue,
+  RoutePlanningResult,
 } from './types';
 
 import { loadRDKit } from './components/molecule';
@@ -99,6 +104,7 @@ declare global {
 import { MetricsDashboard, useMetricsDashboardState } from './components/metrics';
 import { useProjectData } from './hooks/useProjectData';
 import { ReactionAlternativesSidebar } from './components/reaction_alternatives';
+import { RoutePlanningWorkspace, SelectedRoutePlanPanel } from './components/route_planning';
 
 const expandSelectableTools = (tools: Tool[]): SelectableTool[] => {
   let nextId = 0;
@@ -201,6 +207,38 @@ const isConsultWithDocumentTool = (tool: SelectableTool): boolean =>
   selectableToolName(tool) === 'consult_with_document' ||
   tool.tool_server.identifier === 'consult_with_document';
 
+const ROUTE_PLANNING_DEFAULT_TOOLS = new Set([
+  'verify_smiles',
+  'canonicalize_smiles',
+  'is_purchasable',
+  'query_reaction_database',
+  'enumerate_template_routes',
+  'consult_with_document',
+  'search_similar_reactions',
+  'get_related_reaction_info',
+  'get_expert_forward_synthesis_predictions',
+  'get_expert_retro_synthesis_predictions',
+  'get_synthesizability',
+]);
+
+const routeEvaluationIssues = (decision: RouteEvaluationDecision | null): RouteEvaluationIssue[] => {
+  if (!decision) return [];
+  const route = decision.result.candidate_routes.find(
+    (candidate) => candidate.plan_id === decision.plan_id
+  );
+  return route?.evaluation?.issues || [];
+};
+
+const recommendedIssueFixOptions = (
+  issues: RouteEvaluationIssue[]
+): Record<number, RouteEvaluationFixOption | null> =>
+  Object.fromEntries(
+    issues.map((issue, index) => [
+      index,
+      issue.fix_options.find((option) => option.recommended) || null,
+    ])
+  );
+
 const getDuplicateToolNameConflicts = (
   tools: SelectableTool[]
 ): Array<{ name: string; count: number }> => {
@@ -239,6 +277,11 @@ const getDefaultSelectedTools = (tools: SelectableTool[]): SelectableTool[] => {
     return !tool.disabledReason && !!name && nameCounts.get(name) === 1;
   });
 };
+
+const getRoutePlanningDefaultTools = (tools: SelectableTool[]): SelectableTool[] =>
+  getDefaultSelectedTools(tools).filter((tool) =>
+    ROUTE_PLANNING_DEFAULT_TOOLS.has(selectableToolName(tool))
+  );
 
 const extractAttachmentsFromExperimentContext = (experimentContext: any): AgentAttachment[] => {
   const attachmentsById = new Map<string, AgentAttachment>();
@@ -391,6 +434,18 @@ const ChemistryTool: React.FC = () => {
   const [availableTools, setAvailableTools] = useState<Tool[]>([]);
   const [wsTooltipPinned, setWsTooltipPinned] = useState<boolean>(false);
   const [username, setUsername] = useState<string>('<LOCAL USER>');
+  const [routePlanningResult, setRoutePlanningResult] = useState<RoutePlanningResult | null>(null);
+  const [activeRoutePlanId, setActiveRoutePlanId] = useState<string | null>(null);
+  const [selectedRoutePlanId, setSelectedRoutePlanId] = useState<string | null>(null);
+  const [evaluatingRoutePlanId, setEvaluatingRoutePlanId] = useState<string | null>(null);
+  const [refiningRoutePlanId, setRefiningRoutePlanId] = useState<string | null>(null);
+  const [routePlanningGraphVisible, setRoutePlanningGraphVisible] = useState<boolean>(false);
+  const [pendingEvaluationDecision, setPendingEvaluationDecision] =
+    useState<RouteEvaluationDecision | null>(null);
+  const [selectedIssueFixOptions, setSelectedIssueFixOptions] = useState<
+    Record<number, RouteEvaluationFixOption | null>
+  >({});
+  const [routeIssueFeedbackText, setRouteIssueFeedbackText] = useState<string>('');
 
   const wsRef = useRef<WebSocket | null>(null);
   const saveContextModeRef = useRef<'download' | 'sync' | null>(null);
@@ -535,6 +590,7 @@ const ChemistryTool: React.FC = () => {
   const edgesRef = useRef(edges);
   const sidebarStateRef = useRef(sidebarState);
   const hasInitializedToolSelectionRef = useRef(false);
+  const routePlanningToolDefaultsAppliedRef = useRef(false);
   const previousPdfReferenceAvailableRef = useRef(false);
   const previousConsultToolIdRef = useRef<number | null>(null);
 
@@ -578,6 +634,10 @@ const ChemistryTool: React.FC = () => {
 
   // Auto-select only uniquely named tools on the first non-empty tool list load.
   useEffect(() => {
+    if (problemType === 'route-planning') {
+      return;
+    }
+
     if (selectableToolsMap.length === 0) {
       hasInitializedToolSelectionRef.current = false;
       return;
@@ -591,7 +651,7 @@ const ChemistryTool: React.FC = () => {
       void handleToolSelectionConfirm(defaultSelectedIds, defaultSelectedTools);
       console.log('Auto-selected uniquely named tools:', defaultSelectedIds);
     }
-  }, [selectableToolsMap, selectedTools.length]);
+  }, [problemType, selectableToolsMap, selectedTools.length]);
 
   // Update refs whenever state changes
   useLayoutEffect(() => {
@@ -719,6 +779,28 @@ const ChemistryTool: React.FC = () => {
   };
 
   useEffect(() => {
+    if (problemType !== 'route-planning') {
+      routePlanningToolDefaultsAppliedRef.current = false;
+      return;
+    }
+    if (
+      routePlanningToolDefaultsAppliedRef.current ||
+      selectableToolsMap.length === 0
+    ) {
+      return;
+    }
+
+    const defaultSelectedTools = getRoutePlanningDefaultTools(selectableToolsMap);
+    const defaultSelectedIds = defaultSelectedTools.map((tool) => tool.id);
+    routePlanningToolDefaultsAppliedRef.current = true;
+    setSelectedTools(defaultSelectedIds);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      void handleToolSelectionConfirm(defaultSelectedIds, defaultSelectedTools);
+    }
+    console.log('Selected route-planning tools:', defaultSelectedIds);
+  }, [problemType, selectableToolsMap]);
+
+  useEffect(() => {
     const disabledToolIds = new Set(
       selectableToolsMap.filter((tool) => tool.disabledReason).map((tool) => tool.id)
     );
@@ -775,6 +857,17 @@ const ChemistryTool: React.FC = () => {
       }
     }
   }, [availableToolsMap, isPdfReferenceAvailable, selectedTools]);
+
+  useEffect(() => {
+    if (!selectedRoutePlanId || !routePlanningResult) return;
+    const selectedPlanExists = routePlanningResult.candidate_routes.some(
+      (route) => route.plan_id === selectedRoutePlanId
+    );
+    if (!selectedPlanExists) {
+      setSelectedRoutePlanId(null);
+      setRoutePlanningGraphVisible(false);
+    }
+  }, [routePlanningResult, selectedRoutePlanId]);
 
   // Callback function to handle molecule name preference changes
   const handleMoleculeNameSave = async (moleculeName: string): Promise<void> => {
@@ -876,6 +969,14 @@ const ChemistryTool: React.FC = () => {
   };
 
   const loadContext = (data: Experiment): void => {
+    const loadedExperimentContext =
+      data.routePlanningResult && !data.experimentContext?.routePlanningResult
+        ? {
+            ...(data.experimentContext || {}),
+            routePlanningResult: data.routePlanningResult,
+          }
+        : data.experimentContext;
+
     // Conditionally set everything that is in the context
     data.smiles !== undefined && setSmiles(data.smiles);
     data.problemType !== undefined && setProblemType(data.problemType);
@@ -899,15 +1000,23 @@ const ChemistryTool: React.FC = () => {
       graphState.setOffset(data.graphState.offset);
     }
     data.autoZoom !== undefined && setAutoZoom(data.autoZoom);
+    data.routePlanningResult !== undefined && setRoutePlanningResult(data.routePlanningResult);
+    data.activeRoutePlanId !== undefined && setActiveRoutePlanId(data.activeRoutePlanId);
+    data.selectedRoutePlanId !== undefined && setSelectedRoutePlanId(data.selectedRoutePlanId);
+    if (data.routePlanningGraphVisible !== undefined) {
+      setRoutePlanningGraphVisible(data.routePlanningGraphVisible);
+    } else if (data.selectedRoutePlanId) {
+      setRoutePlanningGraphVisible(true);
+    }
     setPdfReference(data.pdfReference ? { ...data.pdfReference, status: 'missing' } : null);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({ action: 'configure-pdf-reference', pdfReference: null, silent: true })
       );
     }
-    if (data.experimentContext !== undefined) {
-      setExperimentContext(data.experimentContext);
-      hydrateAttachmentRegistry(data.experimentContext);
+    if (loadedExperimentContext !== undefined) {
+      setExperimentContext(loadedExperimentContext);
+      hydrateAttachmentRegistry(loadedExperimentContext);
     }
     if (data.sidebarState) {
       sidebarState.setMessages(data.sidebarState.messages);
@@ -916,12 +1025,12 @@ const ChemistryTool: React.FC = () => {
 
     // I was getting "websocket not connected" alerts
     if (
-      (data.experimentContext || data.treeNodes) &&
+      (loadedExperimentContext || data.treeNodes) &&
       wsRef.current &&
       wsRef.current.readyState === WebSocket.OPEN
     ) {
       sendMessageToServer('load-context', {
-        ...(data.experimentContext && { experimentContext: data.experimentContext! }),
+        ...(loadedExperimentContext && { experimentContext: loadedExperimentContext }),
         ...(data.treeNodes && { nodes: data.treeNodes! }),
         ...(data.edges && { edges: data.edges }),
         problemType: data.problemType,
@@ -952,6 +1061,8 @@ const ChemistryTool: React.FC = () => {
       experimentName = `Optimizing ${propertyName} for ${smiles}`;
     } else if (problemType === 'retrosynthesis') {
       experimentName = `Synthesizing ${smiles}`;
+    } else if (problemType === 'route-planning') {
+      experimentName = `Planning routes for ${smiles}`;
     }
 
     // Check if we need to create project and/or experiment
@@ -1009,10 +1120,20 @@ const ChemistryTool: React.FC = () => {
       markAgentChatActive('lmo:main');
     } else if (problemType === 'custom') {
       markAgentChatActive('custom:main');
+    } else if (problemType === 'route-planning') {
+      markAgentChatActive('route-planning:planner');
     }
     setTreeNodes([]);
     setEdges([]);
     setExperimentContext(undefined);
+    setRoutePlanningResult(null);
+    setActiveRoutePlanId(null);
+    setSelectedRoutePlanId(null);
+    setEvaluatingRoutePlanId(null);
+    setRoutePlanningGraphVisible(false);
+    setPendingEvaluationDecision(null);
+    setSelectedIssueFixOptions({});
+    setRouteIssueFeedbackText('');
     attachmentRegistryRef.current = {};
     setAttachmentRegistry({});
     graphState.setOffset({ x: 50, y: 50 });
@@ -1028,6 +1149,7 @@ const ChemistryTool: React.FC = () => {
       customPropertyAscending,
       systemPrompt,
       userPrompt: problemPrompt,
+      query: problemType === 'route-planning' ? problemPrompt : undefined,
       runSettings: {
         promptDebugging: debugMode,
         moleculeName: orchestratorSettings.moleculeName || 'brand',
@@ -1099,6 +1221,7 @@ const ChemistryTool: React.FC = () => {
       let pdfReferenceToPersist: PdfReferenceMetadata | null | undefined;
       let experimentContextToPersist: any;
       let shouldDownloadFullContext = false;
+      let routePlanIdToSelect: string | null = null;
       flushSync(() => {
         if (wsRef.current !== socket) return; // Ignore messages from old sockets
 
@@ -1167,6 +1290,8 @@ const ChemistryTool: React.FC = () => {
             console.log('Computation stopped by backend');
             setIsComputing(false);
             setIsComputingTemplates(false);
+            setEvaluatingRoutePlanId(null);
+            setRefiningRoutePlanId(null);
             clearActiveAgentChats();
             unhighlightNodes();
             setTreeNodes(clearLeafReactions);
@@ -1176,6 +1301,8 @@ const ChemistryTool: React.FC = () => {
           case 'complete': {
             setIsComputing(false);
             setIsComputingTemplates(false);
+            setEvaluatingRoutePlanId(null);
+            setRefiningRoutePlanId(null);
             clearActiveAgentChats();
             unhighlightNodes();
             setTreeNodes(clearLeafReactions);
@@ -1207,6 +1334,68 @@ const ChemistryTool: React.FC = () => {
             const nextReference = data.reference || null;
             setPdfReference(nextReference);
             pdfReferenceToPersist = nextReference;
+            break;
+          }
+          case 'route-planning-result-response': {
+            const result = data.result || null;
+            setRoutePlanningResult(result);
+            shouldSyncExperimentContext = true;
+            setPendingEvaluationDecision(null);
+            setSelectedIssueFixOptions({});
+            setRouteIssueFeedbackText('');
+            setActiveRoutePlanId((previous) => {
+              const planIds =
+                result?.candidate_routes
+                  .map((route) => route.plan_id)
+                  .filter((planId): planId is string => Boolean(planId)) || [];
+              return previous && planIds.includes(previous) ? previous : planIds[0] || null;
+            });
+            break;
+          }
+          case 'route-planning-question-response': {
+            shouldSyncExperimentContext = true;
+            setRoutePlanningResult((previous) => {
+              if (!previous || !data.planId) return previous;
+              return {
+                ...previous,
+                candidate_routes: previous.candidate_routes.map((route) =>
+                  route.plan_id === data.planId ? { ...route, answer: data.answer || '' } : route
+                ),
+              };
+            });
+            break;
+          }
+          case 'route-planning-evaluation-response': {
+            const decision = data.decision || null;
+            const issues = routeEvaluationIssues(decision);
+            const needsUserDecision = Boolean(decision?.needs_user_decision && issues.length > 0);
+            setRoutePlanningResult(decision?.result || null);
+            setEvaluatingRoutePlanId(null);
+            shouldSyncExperimentContext = true;
+            setPendingEvaluationDecision(needsUserDecision ? decision : null);
+            setSelectedIssueFixOptions(
+              needsUserDecision ? recommendedIssueFixOptions(issues) : {}
+            );
+            setRouteIssueFeedbackText('');
+            if (decision?.plan_id && !needsUserDecision) {
+              routePlanIdToSelect = decision.plan_id;
+            }
+            break;
+          }
+          case 'route-planning-select-response': {
+            const graphContext = data.graphContext || {};
+            setRoutePlanningResult(data.result || null);
+            setSelectedRoutePlanId(data.planId || null);
+            setEvaluatingRoutePlanId(null);
+            setRefiningRoutePlanId(null);
+            setRoutePlanningGraphVisible(Boolean(data.planId));
+            shouldSyncExperimentContext = true;
+            setPendingEvaluationDecision(null);
+            setReactionSidebarOpen(false);
+            setSelectedReactionNode(null);
+            setContextMenu({ node: null, isReaction: false, x: 0, y: 0 });
+            setTreeNodes(Object.values(graphContext.node_ids || {}));
+            setEdges(Object.values(graphContext.edges || {}));
             break;
           }
           case 'local-mcp-request': {
@@ -1340,6 +1529,9 @@ const ChemistryTool: React.FC = () => {
       if (shouldSyncExperimentContext) {
         requestExperimentContextSync();
       }
+      if (routePlanIdToSelect) {
+        sendRoutePlanSelect(routePlanIdToSelect);
+      }
       if (pdfReferenceToPersist !== undefined) {
         const projectId = projectSidebar.selectionRef.current.projectId;
         const experimentId = projectSidebar.selectionRef.current.experimentId;
@@ -1378,6 +1570,7 @@ const ChemistryTool: React.FC = () => {
         setWsReconnecting(false);
         setIsComputing(false);
         setIsComputingTemplates(false);
+        setRefiningRoutePlanId(null);
         clearActiveAgentChats();
         setWsError((error as any).message || 'Connection failed');
         setAvailableTools([]);
@@ -1395,6 +1588,7 @@ const ChemistryTool: React.FC = () => {
         setWsConnected(false);
         setIsComputing(false);
         setIsComputingTemplates(false);
+        setRefiningRoutePlanId(null);
         clearActiveAgentChats();
         setWsReconnecting(false);
         setAvailableTools([]);
@@ -1434,6 +1628,14 @@ const ChemistryTool: React.FC = () => {
     setAllChatsOpen(false);
     setAgentKeys([]);
     setExperimentContext(undefined);
+    setRoutePlanningResult(null);
+    setActiveRoutePlanId(null);
+    setSelectedRoutePlanId(null);
+    setEvaluatingRoutePlanId(null);
+    setRefiningRoutePlanId(null);
+    setPendingEvaluationDecision(null);
+    setSelectedIssueFixOptions({});
+    setRouteIssueFeedbackText('');
     attachmentRegistryRef.current = {};
     setAttachmentRegistry({});
     metricsDashboardState.setMetricsHistory([]);
@@ -1491,6 +1693,10 @@ const ChemistryTool: React.FC = () => {
             autoZoom,
             sidebarState: sidebarStateRef.current,
             pdfReference: persistedPdfReference(pdfReference),
+            routePlanningResult,
+            activeRoutePlanId,
+            selectedRoutePlanId,
+            routePlanningGraphVisible,
             experimentContext,
           };
         }
@@ -1504,6 +1710,10 @@ const ChemistryTool: React.FC = () => {
     metricsDashboardState,
     autoZoom,
     pdfReference,
+    routePlanningResult,
+    activeRoutePlanId,
+    selectedRoutePlanId,
+    routePlanningGraphVisible,
     experimentContext,
     systemPrompt,
     problemPrompt,
@@ -1790,6 +2000,102 @@ const ChemistryTool: React.FC = () => {
     [debugMode, orchestratorSettings]
   );
 
+  const sendRoutePlanQuestion = useCallback(
+    (planId: string, query: string, chatAgentKey?: string): void => {
+      markAgentChatActive(chatAgentKey || 'route-planning:planner');
+      setIsComputing(true);
+      sendMessageToServer('route-planning-question', { planId, query, chatAgentKey });
+    },
+    [sendMessageToServer]
+  );
+
+  const sendRoutePlanRefine = useCallback(
+    (
+      planId: string,
+      query: string,
+      chatAgentKey?: string,
+      rematerialize = false
+    ): void => {
+      markAgentChatActive(chatAgentKey || 'route-planning:planner');
+      if (!rematerialize && planId === selectedRoutePlanId) {
+        setSelectedRoutePlanId(null);
+        setRoutePlanningGraphVisible(false);
+      }
+      if (rematerialize) {
+        setRefiningRoutePlanId(planId);
+      }
+      setIsComputing(true);
+      sendMessageToServer('route-planning-refine', {
+        planId,
+        query,
+        chatAgentKey,
+        rematerialize,
+      });
+    },
+    [selectedRoutePlanId, sendMessageToServer]
+  );
+
+  const sendRoutePlanningMore = useCallback(
+    (query: string, chatAgentKey?: string): void => {
+      markAgentChatActive(chatAgentKey || 'route-planning:planner');
+      setIsComputing(true);
+      sendMessageToServer('route-planning-more', { query, chatAgentKey });
+    },
+    [sendMessageToServer]
+  );
+
+  const sendRoutePlanEvaluate = useCallback(
+    (planId: string): void => {
+      markAgentChatActive('route-planning:evaluator');
+      setEvaluatingRoutePlanId(planId);
+      setIsComputing(true);
+      sendMessageToServer('route-planning-evaluate', { planId });
+    },
+    [sendMessageToServer]
+  );
+
+  const sendRoutePlanApplyFixes = useCallback(
+    (
+      planId: string,
+      selectedFixOptions: RouteEvaluationFixOption[],
+      query: string
+    ): void => {
+      markAgentChatActive('route-planning:evaluator');
+      markAgentChatActive('route-planning:planner');
+      setIsComputing(true);
+      sendMessageToServer('route-planning-apply-fixes', {
+        planId,
+        selectedFixOptions,
+        query,
+      });
+    },
+    [sendMessageToServer]
+  );
+
+  const sendRoutePlanContinue = useCallback(
+    (planId: string): void => {
+      setIsComputing(true);
+      sendMessageToServer('route-planning-continue', { planId });
+    },
+    [sendMessageToServer]
+  );
+
+  const sendRoutePlanSelect = useCallback(
+    (planId: string): void => {
+      setIsComputing(true);
+      sendMessageToServer('route-planning-select', { planId });
+    },
+    [sendMessageToServer]
+  );
+
+  const skipRoutePlanEvaluation = useCallback(
+    (planId: string): void => {
+      setEvaluatingRoutePlanId(null);
+      sendRoutePlanSelect(planId);
+    },
+    [sendRoutePlanSelect]
+  );
+
   const requestAgentHistory = useCallback(
     (
       agentKey: string,
@@ -1833,11 +2139,106 @@ const ChemistryTool: React.FC = () => {
     [agentChatDebug, requestAgentHistory]
   );
 
+  const openRoutePlanQuestionChat = useCallback(
+    (planId: string, title: string): void => {
+      openAgentChat(`route-plan:${planId}`, {
+        title: 'Chat About Route',
+        subtitle: title,
+        metadata: {
+          kind: 'route-planning',
+          routePlanningAction: 'question',
+          planId,
+        },
+      });
+    },
+    [openAgentChat]
+  );
+
+  const openRoutePlanRefineChat = useCallback(
+    (planId: string, title: string): void => {
+      openAgentChat(`route-plan:${planId}`, {
+        title: 'Refine Route',
+        subtitle: `What should change about this plan? ${title}`,
+        metadata: {
+          kind: 'route-planning',
+          routePlanningAction: 'refine',
+          planId,
+        },
+      });
+    },
+    [openAgentChat]
+  );
+
+  const openRoutePlanningMoreChat = useCallback((): void => {
+    openAgentChat('route-planning:more', {
+      title: 'Generate More Plans',
+      subtitle: routePlanningResult?.target_smiles
+        ? `What should the new plans do differently? Target: ${routePlanningResult.target_smiles}`
+        : 'What should the new plans do differently?',
+      metadata: {
+        kind: 'route-planning',
+        routePlanningAction: 'more',
+      },
+    });
+  }, [openAgentChat, routePlanningResult?.target_smiles]);
+
+  const backToRoutePlans = useCallback((planId: string): void => {
+    setActiveRoutePlanId(planId);
+    setRoutePlanningGraphVisible(false);
+    setReactionSidebarOpen(false);
+    setSelectedReactionNode(null);
+    setContextMenu({ node: null, isReaction: false, x: 0, y: 0 });
+  }, []);
+
+  const returnToSelectedRoutePlan = useCallback((planId: string): void => {
+    setSelectedRoutePlanId(planId);
+    setRoutePlanningGraphVisible(true);
+    setContextMenu({ node: null, isReaction: false, x: 0, y: 0 });
+  }, []);
+
+  const applyRouteEvaluationFixes = useCallback((): void => {
+    if (!pendingEvaluationDecision) return;
+    const selectedFixes = Object.values(selectedIssueFixOptions).filter(
+      (option): option is RouteEvaluationFixOption => Boolean(option)
+    );
+    sendRoutePlanApplyFixes(
+      pendingEvaluationDecision.plan_id,
+      selectedFixes,
+      routeIssueFeedbackText
+    );
+  }, [
+    pendingEvaluationDecision,
+    routeIssueFeedbackText,
+    selectedIssueFixOptions,
+    sendRoutePlanApplyFixes,
+  ]);
+
+  const ignoreRouteEvaluationIssues = useCallback((): void => {
+    if (!pendingEvaluationDecision) return;
+    sendRoutePlanContinue(pendingEvaluationDecision.plan_id);
+  }, [pendingEvaluationDecision, sendRoutePlanContinue]);
+
   const submitAgentChatMessage = useCallback(
     (query: string, attachments: AgentAttachment[]): void => {
       if (!agentChatHistory) return;
       const metadata =
         agentChatHistory.metadata ?? agentChatMetadataRef.current[agentChatHistory.agentKey];
+      if (metadata?.kind === 'route-planning') {
+        const routePlanningAction = metadata.routePlanningAction;
+        const planId = typeof metadata.planId === 'string' ? metadata.planId : '';
+        if (routePlanningAction === 'question' && planId) {
+          sendRoutePlanQuestion(planId, query, agentChatHistory.agentKey);
+          return;
+        }
+        if (routePlanningAction === 'refine' && planId) {
+          sendRoutePlanRefine(planId, query, agentChatHistory.agentKey);
+          return;
+        }
+        if (routePlanningAction === 'more') {
+          sendRoutePlanningMore(query, agentChatHistory.agentKey);
+          return;
+        }
+      }
       registerAttachments(attachments);
       pendingAttachmentContextSyncRef.current = true;
       markAgentChatActive(agentChatHistory.agentKey);
@@ -1852,7 +2253,15 @@ const ChemistryTool: React.FC = () => {
         nodeId: typeof metadata?.nodeId === 'string' ? metadata.nodeId : undefined,
       });
     },
-    [agentChatDebug, agentChatHistory, registerAttachments, sendMessageToServer]
+    [
+      agentChatDebug,
+      agentChatHistory,
+      registerAttachments,
+      sendMessageToServer,
+      sendRoutePlanQuestion,
+      sendRoutePlanRefine,
+      sendRoutePlanningMore,
+    ]
   );
 
   const handleAgentChatDebugChange = useCallback(
@@ -1900,14 +2309,16 @@ const ChemistryTool: React.FC = () => {
   const handleReactionCardClick = useCallback(
     (node: TreeNode) => {
       if (isComputing) return;
+      if (problemType === 'route-planning') return;
       setSelectedReactionNode(node);
       setReactionSidebarOpen(true);
     },
-    [isComputing]
-  ); // Only depend on isComputing boolean
+    [isComputing, problemType]
+  );
 
   const handleSelectAlternative = useCallback(
     (alt: ReactionAlternative) => {
+      if (problemType === 'route-planning') return;
       const nodeId = selectedReactionNode?.id;
       if (!nodeId) return;
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -1924,14 +2335,15 @@ const ChemistryTool: React.FC = () => {
       // Don't close the sidebar - let user see the active status update
       setIsComputing(true);
     },
-    [selectedReactionNode?.id]
-  ); // Only depend on the ID, not the whole node
+    [problemType, selectedReactionNode?.id]
+  );
 
   const handleCloseReactionAlternativesSidebar = useCallback(() => {
     setReactionSidebarOpen(false);
   }, []); // No dependencies - just a state setter
 
   const handleComputeTemplates = useCallback(() => {
+    if (problemType === 'route-planning') return;
     const nodeId = selectedReactionNode?.id;
     const smiles = selectedReactionNode?.smiles;
     if (!nodeId || !smiles) return;
@@ -1950,10 +2362,17 @@ const ChemistryTool: React.FC = () => {
         })
       );
     }
-  }, [selectedReactionNode?.id, selectedReactionNode?.smiles, debugMode, orchestratorSettings]); // Only depend on primitive values
+  }, [
+    problemType,
+    selectedReactionNode?.id,
+    selectedReactionNode?.smiles,
+    debugMode,
+    orchestratorSettings,
+  ]);
 
   const handleComputeFlaskAI = useCallback(
     (customPrompt: boolean, aiOnly: boolean) => {
+      if (problemType === 'route-planning') return;
       const nodeId = selectedReactionNode?.id;
       if (!nodeId) return;
 
@@ -1979,8 +2398,8 @@ const ChemistryTool: React.FC = () => {
       }
       setIsComputing(true);
     },
-    [selectedReactionNode?.id, debugMode, orchestratorSettings]
-  ); // Only depend on the ID
+    [problemType, selectedReactionNode?.id, debugMode, orchestratorSettings]
+  );
 
   const stableAlternatives = useMemo(() => {
     return selectedReactionNode?.reaction?.alternatives || [];
@@ -2091,6 +2510,24 @@ const ChemistryTool: React.FC = () => {
   const visibleAgentKeys = useMemo(
     () => Array.from(new Set([...activeAgentKeys, ...agentKeys])),
     [activeAgentKeys, agentKeys]
+  );
+  const pendingEvaluationIssues = useMemo(
+    () => routeEvaluationIssues(pendingEvaluationDecision),
+    [pendingEvaluationDecision]
+  );
+  const pendingEvaluationRoute = useMemo(
+    () =>
+      pendingEvaluationDecision?.result.candidate_routes.find(
+        (route) => route.plan_id === pendingEvaluationDecision.plan_id
+      ) || null,
+    [pendingEvaluationDecision]
+  );
+  const selectedRoutePlan = useMemo(
+    () =>
+      routePlanningResult?.candidate_routes.find(
+        (route) => route.plan_id === selectedRoutePlanId
+      ) || null,
+    [routePlanningResult, selectedRoutePlanId]
   );
 
   return (
@@ -2491,6 +2928,7 @@ const ChemistryTool: React.FC = () => {
                       className="form-select"
                     >
                       <option value="retrosynthesis">Retrosynthesis</option>
+                      <option value="route-planning">Route Planning</option>
                       <option value="optimization">Lead Molecule Optimization</option>
                       <option value="custom">Custom</option>
                     </select>
@@ -2706,71 +3144,137 @@ const ChemistryTool: React.FC = () => {
                   </div>
                 </div>
               </div>
+              {problemType === 'route-planning' && (
+                <div className="mt-4">
+                  <label className="form-label">Route Requirements</label>
+                  <textarea
+                    value={problemPrompt}
+                    onChange={(e) => setProblemPrompt(e.target.value)}
+                    disabled={isComputing}
+                    placeholder="Optional constraints, preferred or disallowed starting materials, route length, or strategic preferences"
+                    className="form-textarea h-24"
+                  />
+                </div>
+              )}
             </div>
 
-            <div className="card relative" style={{ height: '600px' }}>
-              {treeNodes.length === 0 && !isComputing ? (
-                <div className="empty-state">
-                  <FlaskConical className="empty-state-icon" />
-                  <p className="empty-state-text">
-                    {wsConnected
-                      ? `Click "Run" to start ${
-                          problemType === 'optimization'
-                            ? 'molecular discovery'
-                            : 'the molecular computation tree'
-                        }`
-                      : 'Waiting for backend connection...'}
-                  </p>
-                  <p className="empty-state-subtext">
-                    {autoZoom ? 'Auto-zoom will fit all molecules' : 'Drag to pan • Scroll to zoom'}
-                  </p>
-                  {!wsConnected && (
-                    <div className="alert alert-warning max-w-md mt-4">
-                      <div className="alert-warning-text text-center">
-                        <strong>Backend Required:</strong> Start your Python backend server at{' '}
-                        <code className="bg-black/30 px-2 py-1 rounded">{WS_SERVER}</code> to enable
-                        molecular computations.
+            {problemType === 'route-planning' &&
+            routePlanningResult &&
+            !routePlanningGraphVisible ? (
+              <RoutePlanningWorkspace
+                result={routePlanningResult}
+                activePlanId={activeRoutePlanId}
+                onActivePlanChange={setActiveRoutePlanId}
+                rdkitModule={rdkitModule}
+                isComputing={isComputing}
+                onChatAboutRoute={openRoutePlanQuestionChat}
+                onRefineRoute={openRoutePlanRefineChat}
+                onGenerateMore={openRoutePlanningMoreChat}
+                onSelectPlan={sendRoutePlanEvaluate}
+                evaluatingPlanId={evaluatingRoutePlanId}
+                onSkipEvaluation={skipRoutePlanEvaluation}
+                selectedPlanId={selectedRoutePlanId}
+                onReturnToSelectedPlan={returnToSelectedRoutePlan}
+              />
+            ) : (
+              <>
+                {problemType === 'route-planning' && selectedRoutePlan && (
+                  <SelectedRoutePlanPanel
+                    route={selectedRoutePlan}
+                    isComputing={isComputing}
+                    onBackToPlans={backToRoutePlans}
+                    onChatAboutRoute={openRoutePlanQuestionChat}
+                    onRefineRoute={openRoutePlanRefineChat}
+                  />
+                )}
+                <div className="card relative" style={{ height: '600px' }}>
+                  {refiningRoutePlanId && (
+                    <div
+                      className="alert alert-info absolute top-4 left-1/2 -translate-x-1/2 z-20"
+                      style={{ marginTop: 0 }}
+                    >
+                      <div className="alert-info-text whitespace-nowrap">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span className="font-medium">Refining selected route...</span>
                       </div>
                     </div>
                   )}
+                  {problemType === 'route-planning' &&
+                  isComputing &&
+                  !routePlanningResult &&
+                  treeNodes.length === 0 ? (
+                    <div className="empty-state">
+                      <Loader2 className="w-8 h-8 animate-spin text-accent" />
+                      <p className="empty-state-text">Generating route plans...</p>
+                    </div>
+                  ) : treeNodes.length === 0 && !isComputing ? (
+                    <div className="empty-state">
+                      <FlaskConical className="empty-state-icon" />
+                      <p className="empty-state-text">
+                        {wsConnected
+                          ? `Click "Run" to start ${
+                              problemType === 'optimization'
+                                ? 'molecular discovery'
+                                : 'the molecular computation tree'
+                            }`
+                          : 'Waiting for backend connection...'}
+                      </p>
+                      <p className="empty-state-subtext">
+                        {autoZoom
+                          ? 'Auto-zoom will fit all molecules'
+                          : 'Drag to pan • Scroll to zoom'}
+                      </p>
+                      {!wsConnected && (
+                        <div className="alert alert-warning max-w-md mt-4">
+                          <div className="alert-warning-text text-center">
+                            <strong>Backend Required:</strong> Start your Python backend server at{' '}
+                            <code className="bg-black/30 px-2 py-1 rounded">{WS_SERVER}</code> to
+                            enable molecular computations.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <MoleculeGraph
+                      {...graphState}
+                      nodes={treeNodes}
+                      edges={edges}
+                      autoZoom={autoZoom}
+                      setAutoZoom={setAutoZoom}
+                      ctx={contextMenu}
+                      handleNodeClick={handleNodeClick}
+                      handleReactionClick={handleReactionClick}
+                      handleReactionCardClick={handleReactionCardClick}
+                      selectedReactionNodeId={selectedReactionNode?.id}
+                      reactionSidebarOpen={reactionSidebarOpen}
+                      rdkitModule={rdkitModule}
+                    />
+                  )}
+
+                  {problemType !== 'route-planning' &&
+                    reactionSidebarOpen &&
+                    selectedReactionNode?.reaction && (
+                      <ReactionAlternativesSidebar
+                        isOpen={reactionSidebarOpen}
+                        onClose={handleCloseReactionAlternativesSidebar}
+                        productMolecule={selectedReactionNode.label} // Strip HTML
+                        productSmiles={selectedReactionNode.smiles}
+                        alternatives={stableAlternatives}
+                        onSelectAlternative={handleSelectAlternative}
+                        onComputeTemplates={handleComputeTemplates}
+                        onComputeFlaskAI={handleComputeFlaskAI}
+                        wsConnected={wsConnected}
+                        isComputing={isComputing}
+                        isComputingTemplates={isComputingTemplates}
+                        templatesSearched={selectedReactionNode.reaction.templatesSearched}
+                        rdkitModule={rdkitModule}
+                      />
+                    )}
                 </div>
-              ) : (
-                <MoleculeGraph
-                  {...graphState}
-                  nodes={treeNodes}
-                  edges={edges}
-                  autoZoom={autoZoom}
-                  setAutoZoom={setAutoZoom}
-                  ctx={contextMenu}
-                  handleNodeClick={handleNodeClick}
-                  handleReactionClick={handleReactionClick}
-                  handleReactionCardClick={handleReactionCardClick}
-                  selectedReactionNodeId={selectedReactionNode?.id}
-                  reactionSidebarOpen={reactionSidebarOpen}
-                  rdkitModule={rdkitModule}
-                />
-              )}
+              </>
+            )}
 
-              {reactionSidebarOpen && selectedReactionNode?.reaction && (
-                <ReactionAlternativesSidebar
-                  isOpen={reactionSidebarOpen}
-                  onClose={handleCloseReactionAlternativesSidebar}
-                  productMolecule={selectedReactionNode.label} // Strip HTML
-                  productSmiles={selectedReactionNode.smiles}
-                  alternatives={stableAlternatives}
-                  onSelectAlternative={handleSelectAlternative}
-                  onComputeTemplates={handleComputeTemplates}
-                  onComputeFlaskAI={handleComputeFlaskAI}
-                  wsConnected={wsConnected}
-                  isComputing={isComputing}
-                  isComputingTemplates={isComputingTemplates}
-                  templatesSearched={selectedReactionNode.reaction.templatesSearched}
-                  rdkitModule={rdkitModule}
-                />
-              )}
-            </div>
-
-            {isComputing && (
+            {isComputing && problemType !== 'route-planning' && (
               <div className="alert alert-info">
                 <div className="alert-info-text">
                   <Loader2 className="w-5 h-5 animate-spin" />
@@ -2976,12 +3480,23 @@ const ChemistryTool: React.FC = () => {
           )}
 
           {
-            /* Retrosynthesis (Molecule) */ problemType == 'retrosynthesis' &&
+            /* Retrosynthesis (Molecule) */ (problemType === 'retrosynthesis' ||
+              problemType === 'route-planning') &&
               !contextMenu.isReaction && (
                 <>
                   {!contextMenu.node.reaction && (
                     <button
                       onClick={() => {
+                        if (problemType === 'route-planning') {
+                          if (!selectedRoutePlanId) return;
+                          sendRoutePlanRefine(
+                            selectedRoutePlanId,
+                            `Revise this route so molecule ${contextMenu.node!.smiles} is synthesized instead of treated as a terminal starting material. Add the necessary upstream steps and keep the rest of the route unchanged where possible.`,
+                            `route-plan:${selectedRoutePlanId}`,
+                            true
+                          );
+                          return;
+                        }
                         markAgentChatActive(`reaction:${contextMenu.node!.id}`);
                         sendMessageToServer('compute-reaction-from', {
                           nodeId: contextMenu.node!.id,
@@ -2997,12 +3512,19 @@ const ChemistryTool: React.FC = () => {
                   {!isRootNode(contextMenu.node.id, treeNodes) && (
                     <button
                       onClick={() => {
-                        const parentEdge = edges.find(
-                          (edge) => edge.toNode === contextMenu.node!.id
-                        );
                         const parentNode = treeNodes.find(
-                          (node) => node.id === parentEdge?.fromNode
+                          (node) => node.id === contextMenu.node!.parentId
                         );
+                        if (problemType === 'route-planning') {
+                          if (!selectedRoutePlanId || !parentNode) return;
+                          sendRoutePlanRefine(
+                            selectedRoutePlanId,
+                            `Replace precursor ${contextMenu.node!.smiles} used to make ${parentNode.smiles} with a practical alternative. Update the affected reaction and upstream steps while keeping the rest of the route unchanged where possible.`,
+                            `route-plan:${selectedRoutePlanId}`,
+                            true
+                          );
+                          return;
+                        }
                         if (parentNode) {
                           markAgentChatActive(`reaction:${parentNode.id}`);
                         }
@@ -3021,27 +3543,27 @@ const ChemistryTool: React.FC = () => {
               )
           }
 
-          {
-            /* Retrosynthesis (Reaction) */ problemType == 'retrosynthesis' &&
-              contextMenu.isReaction && (
-                <>
-                  <button
-                    onClick={() =>
-                      openAgentChat(`reaction:${contextMenu.node!.id}`, {
-                        title: `Chat about reaction ${contextMenu.node!.id}`,
-                        subtitle: contextMenu.node!.smiles,
-                        metadata: {
-                          kind: 'reaction',
-                          nodeId: contextMenu.node!.id,
-                          smiles: contextMenu.node!.smiles,
-                          reactionHoverInfo: contextMenu.node!.reaction?.hoverInfo,
-                        },
-                      })
-                    }
-                    className="context-menu-item"
-                  >
-                    <MessageCircleQuestion className="w-4 h-4" /> Chat about reaction...
-                  </button>
+          {contextMenu.isReaction &&
+            (problemType === 'retrosynthesis' || problemType === 'route-planning') && (
+              <>
+                <button
+                  onClick={() =>
+                    openAgentChat(`reaction:${contextMenu.node!.id}`, {
+                      title: `Chat about reaction ${contextMenu.node!.id}`,
+                      subtitle: contextMenu.node!.smiles,
+                      metadata: {
+                        kind: 'reaction',
+                        nodeId: contextMenu.node!.id,
+                        smiles: contextMenu.node!.smiles,
+                        reactionHoverInfo: contextMenu.node!.reaction?.hoverInfo,
+                      },
+                    })
+                  }
+                  className="context-menu-item"
+                >
+                  <MessageCircleQuestion className="w-4 h-4" /> Chat about reaction...
+                </button>
+                {problemType === 'retrosynthesis' && (
                   <button
                     onClick={() => {
                       handleReactionCardClick(contextMenu.node!);
@@ -3052,9 +3574,25 @@ const ChemistryTool: React.FC = () => {
                     <PanelRightOpen className="w-4 h-4" />
                     Other Reactions...
                   </button>
-                </>
-              )
-          }
+                )}
+                {problemType === 'route-planning' && selectedRoutePlanId && (
+                  <button
+                    onClick={() =>
+                      sendRoutePlanRefine(
+                        selectedRoutePlanId,
+                        `Replace reaction ${contextMenu.node!.reaction!.id} producing ${contextMenu.node!.smiles} with a different practical reaction. Current reaction details:\n${contextMenu.node!.reaction!.hoverInfo}\nUpdate all affected steps while keeping the rest of the route unchanged where possible.`,
+                        `route-plan:${selectedRoutePlanId}`,
+                        true
+                      )
+                    }
+                    className="context-menu-item context-menu-divider"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Change Reaction
+                  </button>
+                )}
+              </>
+            )}
 
           {contextMenu.isReaction && (
             <div className="context-menu-details custom-scrollbar">
@@ -3344,6 +3882,149 @@ const ChemistryTool: React.FC = () => {
         onReferenceDocumentSave={handleReferenceDocumentSave}
         showOptimizationTab={problemType === 'optimization'}
       />
+
+      <Modal
+        isOpen={!!pendingEvaluationDecision}
+        onClose={() => {
+          setPendingEvaluationDecision(null);
+          setSelectedIssueFixOptions({});
+          setRouteIssueFeedbackText('');
+        }}
+        title="Review Route Issues"
+        subtitle={pendingEvaluationRoute?.plan.title || 'Evaluator found issues to resolve'}
+        size="lg"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setPendingEvaluationDecision(null);
+                setSelectedIssueFixOptions({});
+                setRouteIssueFeedbackText('');
+              }}
+              disabled={isComputing}
+              className="btn btn-secondary"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={ignoreRouteEvaluationIssues}
+              disabled={isComputing || !pendingEvaluationDecision}
+              className="btn btn-secondary"
+            >
+              Ignore And Continue
+            </button>
+            <button
+              type="button"
+              onClick={applyRouteEvaluationFixes}
+              disabled={isComputing || !pendingEvaluationDecision}
+              className="btn btn-primary"
+            >
+              Apply Selected Fixes
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 rounded border border-red-400/50 bg-red-500/15 p-3 text-danger">
+            <XCircle className="w-5 h-5 flex-shrink-0" />
+            <span className="font-semibold">Rejected: evaluator issues require review</span>
+          </div>
+
+          {(pendingEvaluationDecision?.message || pendingEvaluationRoute?.evaluation?.summary) && (
+            <div className="text-sm text-secondary space-y-2">
+              {pendingEvaluationDecision?.message && (
+                <p>{pendingEvaluationDecision.message}</p>
+              )}
+              {pendingEvaluationRoute?.evaluation?.summary && (
+                <p>{pendingEvaluationRoute.evaluation.summary}</p>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {pendingEvaluationIssues.map((issue, issueIndex) => {
+              const selectedFix = selectedIssueFixOptions[issueIndex] || null;
+              return (
+                <section
+                  key={`${issue.step_id || 'route'}-${issueIndex}`}
+                  className="border border-secondary rounded p-3 space-y-3"
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-primary">
+                      {issue.severity} severity
+                      {issue.step_id ? ` - ${issue.step_id}` : ''}
+                    </div>
+                    <p className="text-sm text-secondary mt-1">{issue.reason}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    {issue.fix_options.map((option, optionIndex) => (
+                      <label
+                        key={`${option.label}-${optionIndex}`}
+                        className="flex items-start gap-2 text-sm text-secondary"
+                      >
+                        <input
+                          type="radio"
+                          className="form-radio mt-1"
+                          name={`route-issue-${issueIndex}`}
+                          checked={
+                            selectedFix?.label === option.label &&
+                            selectedFix?.description === option.description
+                          }
+                          onChange={() =>
+                            setSelectedIssueFixOptions((previous) => ({
+                              ...previous,
+                              [issueIndex]: option,
+                            }))
+                          }
+                        />
+                        <span>
+                          <span className="font-medium text-primary">{option.label}</span>
+                          {option.recommended ? (
+                            <span className="text-tertiary"> recommended</span>
+                          ) : null}
+                          <span className="block">{option.description}</span>
+                        </span>
+                      </label>
+                    ))}
+                    <label className="flex items-start gap-2 text-sm text-secondary">
+                      <input
+                        type="radio"
+                        className="form-radio mt-1"
+                        name={`route-issue-${issueIndex}`}
+                        checked={!selectedFix}
+                        onChange={() =>
+                          setSelectedIssueFixOptions((previous) => ({
+                            ...previous,
+                            [issueIndex]: null,
+                          }))
+                        }
+                      />
+                      <span>
+                        <span className="font-medium text-primary">None of these</span>
+                        <span className="block">Use only the notes below for this issue.</span>
+                      </span>
+                    </label>
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+
+          <div>
+            <label className="form-label">Additional Notes</label>
+            <textarea
+              value={routeIssueFeedbackText}
+              onChange={(event) => setRouteIssueFeedbackText(event.target.value)}
+              disabled={isComputing}
+              className="form-textarea h-28"
+              placeholder="Optional guidance for revising this route"
+            />
+          </div>
+        </div>
+      </Modal>
 
       {/* Prompt Debugging Modal */}
       <Modal

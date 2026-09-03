@@ -3,6 +3,7 @@ from typing import Any, Optional
 from fastapi import WebSocket
 import asyncio
 from lc_conductor import ActionManager, handles
+from lc_conductor.agents import AgentRecord, AgentRequest, AgentResponse
 from lc_conductor import (
     BuiltinToolDefinition,
     ToolRuntime,
@@ -30,6 +31,8 @@ from charge_backend.retrosynthesis.ai import (
     ai_based_retrosynthesis,
     db_then_ai_retrosynthesis,
 )
+from charge_backend.retrosynthesis import route_planner
+from charge_backend.retrosynthesis.template import run_ranked_retro_planner
 from charge_backend.retrosynthesis.alternatives import set_reaction_alternative
 from charge_backend.prompt_debugger import debug_prompt
 from charge_backend.backend_helper_funcs import Node
@@ -60,7 +63,12 @@ class FlaskActionManager(ActionManager):
         self.retro_synth_context: Optional[GraphContext] = None
         self.pdf_registry = pdf_registry or PdfDocumentRegistry(self.agent_backend)
         self.builtin_tool_definitions = (
-            builtin_tool_definitions or list_builtin_tool_definitions(self.pdf_registry)
+            builtin_tool_definitions
+            or list_builtin_tool_definitions(
+                self.pdf_registry,
+                getattr(args, "config_file", None),
+                experiment=self.experiment,
+            )
         )
 
     async def cleanup(self):
@@ -98,8 +106,28 @@ class FlaskActionManager(ActionManager):
             ],
         )
 
+    def route_planner_tool_runtime(self) -> ToolRuntime:
+        runtime = self.selected_tool_runtime()
+        return ToolRuntime(
+            bearer_token=runtime.bearer_token,
+            tools=[
+                *runtime.tools,
+                *resolve_builtin_tool_descriptors(
+                    ["verify_smiles", "canonicalize_smiles"],
+                    self.builtin_tool_definitions,
+                ),
+            ],
+        )
+
     def _agent_update_callback(self, agent_key: str, data: dict[str, Any]):
         return partial(self.send_agent_update, agent_key, debug=bool(data.get("debug")))
+
+    def _route_planning_callback(self, agent_key: str, data: dict[str, Any]):
+        return CallbackHandler(
+            self.websocket,
+            agent_key=agent_key,
+            on_agent_update=self._agent_update_callback(agent_key, data),
+        )
 
     def _document_reference_context(self) -> str:
         metadata = self.pdf_registry.active_metadata()
@@ -178,6 +206,8 @@ class FlaskActionManager(ActionManager):
             asyncio.create_task(self._handle_optimization(data))
         elif problem_type == "retrosynthesis":
             asyncio.create_task(self._handle_retrosynthesis(data))
+        elif problem_type == "route-planning":
+            asyncio.create_task(self._handle_route_planning(data))
         elif problem_type == "custom":
             asyncio.create_task(self._handle_custom_problem(data))
         else:
@@ -336,7 +366,572 @@ class FlaskActionManager(ActionManager):
             self.get_retro_synth_context(),
             self.task_manager.websocket,
             self.run_settings,
+            data.get("RetroMode", "single"),
+            self.experiment,
         )
+
+        await self.task_manager.run_task(run_func())
+
+    async def _handle_route_planning(self, data: dict) -> None:
+        """Draft route-level retrosynthesis plans for review."""
+        attachments = validate_image_attachments(data)
+        smiles = data["smiles"]
+
+        await self._send_processing_message(
+            f"Planning candidate routes for {smiles}",
+            source="Route Planner",
+            images=image_refs(attachments) if attachments else None,
+        )
+
+        async def run_func() -> None:
+            summarizer_callback = self._route_planning_callback(
+                "route-planning:summarizer",
+                data,
+            )
+            planner_callback = self._route_planning_callback(
+                "route-planning:planner",
+                data,
+            )
+            clogger = self.task_manager.clogger
+            await self._send_processing_message(
+                f"Enumerating template routes for {smiles}.",
+                source="Route Planner",
+                eventKind="status",
+            )
+            reaction, routes, selected_candidates = await run_ranked_retro_planner(
+                self.args.config_file,
+                smiles,
+                clogger,
+                self.run_settings,
+            )
+            del reaction, routes
+            await self._send_processing_message(
+                "Template route search completed: "
+                f"{len(selected_candidates)} ranked routes selected.",
+                source="Route Planner",
+                eventKind="status",
+            )
+
+            if not selected_candidates:
+                await self._send_processing_message(
+                    f"No ranked template routes found for {smiles}.",
+                    source="Route Planner",
+                )
+                await self.websocket.send_json({"type": "complete"})
+                return
+
+            summaries = await route_planner.summarize_routes(
+                selected_candidates,
+                self.experiment,
+                limit=10,
+                concurrency=10,
+                callback=summarizer_callback,
+                status_callback=partial(
+                    self._send_processing_message,
+                    source="Route Planner",
+                    agentKey="route-planning:summarizer",
+                    eventKind="status",
+                ),
+            )
+            await summarizer_callback.drain()
+            route_context = route_planner.build_route_context(summaries, limit=10)
+
+            await self._send_processing_message(
+                "Planner started generating candidate plans.",
+                source="Route Planner",
+                agentKey="route-planning:planner",
+                eventKind="status",
+            )
+
+            async def report_planner_progress() -> None:
+                elapsed = 0
+                while True:
+                    await asyncio.sleep(30)
+                    elapsed += 30
+                    await self._send_processing_message(
+                        "Planner is still generating candidate plans "
+                        f"({elapsed} seconds elapsed).",
+                        source="Route Planner",
+                        agentKey="route-planning:planner",
+                        eventKind="status",
+                    )
+
+            progress_task = asyncio.create_task(report_planner_progress())
+            try:
+                output = await route_planner.plan_candidate_routes(
+                    smiles,
+                    route_context,
+                    self.experiment,
+                    self.route_planner_tool_runtime(),
+                    user_request=data.get("query"),
+                    attachments=attachments,
+                    agent_key="route-planning:planner",
+                    callback=planner_callback,
+                )
+            finally:
+                progress_task.cancel()
+                await asyncio.gather(progress_task, return_exceptions=True)
+
+            await planner_callback.drain()
+            await self._send_processing_message(
+                "Planner completed candidate plan generation.",
+                source="Route Planner",
+                agentKey="route-planning:planner",
+                eventKind="status",
+            )
+            route_planning_result = route_planner.route_planning_result_from_output(
+                smiles,
+                output,
+                user_constraints=data.get("query"),
+                route_context=route_context,
+            )
+            route_planning_result.base_branch_state = (
+                route_planner.save_compact_route_planning_branch_state(
+                    self.experiment,
+                    route_planning_result,
+                )
+            )
+            self.experiment.route_planning_result = route_planning_result
+            await self._send_processing_message(
+                route_planner.format_route_planning_output(output),
+                source="Route Planner",
+            )
+            await self.websocket.send_json(
+                {
+                    "type": "route-planning-result-response",
+                    "result": route_planner.route_planning_result_payload(
+                        route_planning_result
+                    ),
+                }
+            )
+            await self.websocket.send_json(
+                {
+                    "type": "route-planning-response",
+                    "plans": output.model_dump(mode="json"),
+                }
+            )
+            await self.websocket.send_json({"type": "complete"})
+
+        await self.task_manager.run_task(run_func())
+
+    async def _run_in_route_plan_branch(
+        self,
+        result,
+        plan_id: str,
+        action,
+        *,
+        latest_user_message: str | None = None,
+        latest_assistant_message=None,
+    ):
+        _, plan = route_planner.find_route_plan(result, plan_id)
+        branch_state = plan.branch_state or result.base_branch_state
+        route_planner.restore_route_planning_branch_state(
+            self.experiment, branch_state, result
+        )
+        output = await action()
+        _, current_plan = route_planner.find_route_plan(result, plan_id)
+        assistant_message = (
+            latest_assistant_message(output)
+            if callable(latest_assistant_message)
+            else latest_assistant_message
+        )
+        current_plan.branch_state = (
+            route_planner.save_compact_route_planning_branch_state(
+                self.experiment,
+                result,
+                latest_user_message=latest_user_message,
+                latest_assistant_message=assistant_message,
+            )
+        )
+        self.experiment.route_planning_result = result
+        return output
+
+    def _route_planning_planner_record(
+        self,
+        result,
+        plan_id: str | None = None,
+    ) -> AgentRecord | None:
+        branch_state = result.base_branch_state
+        if plan_id:
+            try:
+                _, plan = route_planner.find_route_plan(result, plan_id)
+            except ValueError:
+                plan = None
+            if plan is not None:
+                branch_state = plan.branch_state or result.base_branch_state
+
+        agent_sessions = (
+            branch_state.get("agentSessions", {})
+            if isinstance(branch_state, dict)
+            else {}
+        )
+        record = agent_sessions.get("route-planning:planner")
+        return AgentRecord.model_validate(record) if record is not None else None
+
+    async def _send_route_planning_agent_update(
+        self,
+        chat_agent_key: str | None,
+        result,
+        plan_id: str | None = None,
+    ) -> None:
+        if not chat_agent_key:
+            return
+        record = self._route_planning_planner_record(result, plan_id)
+        if record is None:
+            return
+        await self.websocket.send_json(
+            AgentResponse(agentKey=chat_agent_key, agent=record).model_dump(
+                exclude_none=True
+            )
+        )
+
+    @handles("route-planning-question")
+    async def handle_route_planning_question(self, data: dict) -> None:
+        result = self.experiment.route_planning_result
+        if result is None:
+            await self._send_processing_message(
+                "No route-planning result is available.",
+                source="Route Planner",
+            )
+            await self.websocket.send_json({"type": "complete"})
+            return
+
+        async def run_func() -> None:
+            plan_id = str(data["planId"])
+            planner_callback = self._route_planning_callback(
+                "route-planning:planner",
+                data,
+            )
+            answer = await self._run_in_route_plan_branch(
+                result,
+                plan_id,
+                lambda: route_planner.answer_route_plan_question(
+                    result,
+                    plan_id,
+                    str(data.get("query") or ""),
+                    self.experiment,
+                    self.route_planner_tool_runtime(),
+                    callback=planner_callback,
+                ),
+                latest_user_message=str(data.get("query") or ""),
+                latest_assistant_message=lambda answer: answer,
+            )
+            await planner_callback.drain()
+            await self.websocket.send_json(
+                {
+                    "type": "route-planning-question-response",
+                    "planId": plan_id,
+                    "answer": answer,
+                }
+            )
+            await self._send_route_planning_agent_update(
+                data.get("chatAgentKey"),
+                result,
+                plan_id,
+            )
+            await self.websocket.send_json({"type": "complete"})
+
+        await self.task_manager.run_task(run_func())
+
+    @handles("route-planning-refine")
+    async def handle_route_planning_refine(self, data: dict) -> None:
+        result = self.experiment.route_planning_result
+        if result is None:
+            await self._send_processing_message(
+                "No route-planning result is available.",
+                source="Route Planner",
+            )
+            await self.websocket.send_json({"type": "complete"})
+            return
+
+        async def run_func() -> None:
+            plan_id = str(data["planId"])
+            planner_callback = self._route_planning_callback(
+                "route-planning:planner",
+                data,
+            )
+            await self._run_in_route_plan_branch(
+                result,
+                plan_id,
+                lambda: route_planner.refine_route_plan_from_user_guidance(
+                    result,
+                    plan_id,
+                    str(data.get("query") or ""),
+                    self.experiment,
+                    self.route_planner_tool_runtime(),
+                    callback=planner_callback,
+                ),
+                latest_user_message=str(data.get("query") or ""),
+                latest_assistant_message=(
+                    "Route updated. Review the revised plan in the route planner."
+                ),
+            )
+            await planner_callback.drain()
+            if data.get("rematerialize"):
+                graph_context = route_planner.commit_route_plan_to_graph(
+                    result,
+                    plan_id,
+                    self.experiment,
+                    self.run_settings.molecule_name_format,
+                )
+                await self.websocket.send_json(
+                    {
+                        "type": "route-planning-select-response",
+                        "planId": plan_id,
+                        "graphContext": graph_context.save_state(),
+                        "result": route_planner.route_planning_result_payload(result),
+                    }
+                )
+            else:
+                await self.websocket.send_json(
+                    {
+                        "type": "route-planning-result-response",
+                        "result": route_planner.route_planning_result_payload(result),
+                    }
+                )
+            await self._send_route_planning_agent_update(
+                data.get("chatAgentKey"),
+                result,
+                plan_id,
+            )
+            await self.websocket.send_json({"type": "complete"})
+
+        await self.task_manager.run_task(run_func())
+
+    @handles("route-planning-more")
+    async def handle_route_planning_more(self, data: dict) -> None:
+        result = self.experiment.route_planning_result
+        if result is None:
+            await self._send_processing_message(
+                "No route-planning result is available.",
+                source="Route Planner",
+            )
+            await self.websocket.send_json({"type": "complete"})
+            return
+
+        async def run_func() -> None:
+            planner_callback = self._route_planning_callback(
+                "route-planning:planner",
+                data,
+            )
+            route_planner.restore_route_planning_branch_state(
+                self.experiment,
+                result.base_branch_state,
+                result,
+            )
+            output = await route_planner.plan_more_candidate_routes(
+                result,
+                self.experiment,
+                self.route_planner_tool_runtime(),
+                user_feedback=str(data.get("query") or ""),
+                callback=planner_callback,
+            )
+            await planner_callback.drain()
+            result.base_branch_state = (
+                route_planner.save_compact_route_planning_branch_state(
+                    self.experiment,
+                    result,
+                    latest_user_message=str(data.get("query") or ""),
+                    latest_assistant_message=(
+                        "Generated additional route plans."
+                        if output is not None
+                        else None
+                    ),
+                )
+            )
+            self.experiment.route_planning_result = result
+            await self.websocket.send_json(
+                {
+                    "type": "route-planning-result-response",
+                    "result": route_planner.route_planning_result_payload(result),
+                }
+            )
+            await self._send_route_planning_agent_update(
+                data.get("chatAgentKey"),
+                result,
+            )
+            await self.websocket.send_json({"type": "complete"})
+
+        await self.task_manager.run_task(run_func())
+
+    @handles("route-planning-evaluate")
+    async def handle_route_planning_evaluate(self, data: dict) -> None:
+        result = self.experiment.route_planning_result
+        if result is None:
+            await self._send_processing_message(
+                "No route-planning result is available.",
+                source="Route Planner",
+            )
+            await self.websocket.send_json({"type": "complete"})
+            return
+
+        async def run_func() -> None:
+            plan_id = str(data["planId"])
+            evaluator_callback = self._route_planning_callback(
+                "route-planning:evaluator",
+                data,
+            )
+            decision = await self._run_in_route_plan_branch(
+                result,
+                plan_id,
+                lambda: route_planner.evaluate_selected_route_plan(
+                    result,
+                    plan_id,
+                    self.experiment,
+                    self.route_planner_tool_runtime(),
+                    evaluator_callback=evaluator_callback,
+                    pipette_status_callback=partial(
+                        self._send_processing_message,
+                        source="Pipette",
+                        agentKey="route-planning:evaluator",
+                        eventKind="status",
+                    ),
+                    status_callback=partial(
+                        self._send_processing_message,
+                        source="Route Evaluator",
+                        agentKey="route-planning:evaluator",
+                        eventKind="status",
+                    ),
+                ),
+            )
+            await evaluator_callback.drain()
+            await self.websocket.send_json(
+                {
+                    "type": "route-planning-evaluation-response",
+                    "decision": route_planner.route_evaluation_decision_payload(
+                        decision
+                    ),
+                }
+            )
+            await self.websocket.send_json({"type": "complete"})
+
+        await self.task_manager.run_task(run_func())
+
+    @handles("route-planning-apply-fixes")
+    async def handle_route_planning_apply_fixes(self, data: dict) -> None:
+        result = self.experiment.route_planning_result
+        if result is None:
+            await self._send_processing_message(
+                "No route-planning result is available.",
+                source="Route Planner",
+            )
+            await self.websocket.send_json({"type": "complete"})
+            return
+
+        async def run_func() -> None:
+            plan_id = str(data["planId"])
+            planner_callback = self._route_planning_callback(
+                "route-planning:planner",
+                data,
+            )
+            evaluator_callback = self._route_planning_callback(
+                "route-planning:evaluator",
+                data,
+            )
+            fix_options = [
+                route_planner.RouteEvaluationFixOption.model_validate(option)
+                for option in data.get("selectedFixOptions", [])
+            ]
+            decision = await self._run_in_route_plan_branch(
+                result,
+                plan_id,
+                lambda: route_planner.apply_evaluator_fixes_to_route_plan(
+                    result,
+                    plan_id,
+                    self.experiment,
+                    self.route_planner_tool_runtime(),
+                    user_guidance=str(data.get("query") or ""),
+                    selected_fix_options=fix_options,
+                    planner_callback=planner_callback,
+                    evaluator_callback=evaluator_callback,
+                    pipette_status_callback=partial(
+                        self._send_processing_message,
+                        source="Pipette",
+                        agentKey="route-planning:evaluator",
+                        eventKind="status",
+                    ),
+                    status_callback=partial(
+                        self._send_processing_message,
+                        source="Route Evaluator",
+                        agentKey="route-planning:evaluator",
+                        eventKind="status",
+                    ),
+                ),
+                latest_user_message=str(data.get("query") or ""),
+                latest_assistant_message=lambda decision: decision.message
+                or "Evaluator fixes were applied and the revised route was evaluated.",
+            )
+            await planner_callback.drain()
+            await evaluator_callback.drain()
+            await self.websocket.send_json(
+                {
+                    "type": "route-planning-evaluation-response",
+                    "decision": route_planner.route_evaluation_decision_payload(
+                        decision
+                    ),
+                }
+            )
+            await self.websocket.send_json({"type": "complete"})
+
+        await self.task_manager.run_task(run_func())
+
+    @handles("route-planning-continue")
+    async def handle_route_planning_continue(self, data: dict) -> None:
+        result = self.experiment.route_planning_result
+        if result is None:
+            await self._send_processing_message(
+                "No route-planning result is available.",
+                source="Route Planner",
+            )
+            await self.websocket.send_json({"type": "complete"})
+            return
+
+        plan_id = str(data["planId"])
+        decision = route_planner.continue_with_evaluated_route_plan(result, plan_id)
+        await self.websocket.send_json(
+            {
+                "type": "route-planning-evaluation-response",
+                "decision": route_planner.route_evaluation_decision_payload(decision),
+            }
+        )
+        await self.websocket.send_json({"type": "complete"})
+
+    @handles("route-planning-select")
+    async def handle_route_planning_select(self, data: dict) -> None:
+        result = self.experiment.route_planning_result
+        if result is None:
+            await self._send_processing_message(
+                "No route-planning result is available.",
+                source="Route Planner",
+            )
+            await self.websocket.send_json({"type": "complete"})
+            return
+
+        async def run_func() -> None:
+            plan_id = str(data["planId"])
+
+            async def commit_selected_plan():
+                return route_planner.commit_route_plan_to_graph(
+                    result,
+                    plan_id,
+                    self.experiment,
+                    self.run_settings.molecule_name_format,
+                )
+
+            graph_context = await self._run_in_route_plan_branch(
+                result,
+                plan_id,
+                commit_selected_plan,
+            )
+            await self.websocket.send_json(
+                {
+                    "type": "route-planning-select-response",
+                    "planId": plan_id,
+                    "graphContext": graph_context.save_state(),
+                    "result": route_planner.route_planning_result_payload(result),
+                }
+            )
+            await self.websocket.send_json({"type": "complete"})
 
         await self.task_manager.run_task(run_func())
 
@@ -799,8 +1394,53 @@ class FlaskActionManager(ActionManager):
             return
         raise ValueError(f"Unsupported chat agent key: {agent_key}")
 
+    @handles("get-agent")
+    async def handle_get_agent(self, data: dict[str, Any]) -> None:
+        request = AgentRequest.model_validate(data)
+        metadata = (
+            data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        )
+
+        record = None
+        if metadata.get("kind") == "route-planning":
+            result = self.experiment.route_planning_result
+            plan_id = metadata.get("planId")
+            record = (
+                self._route_planning_planner_record(
+                    result,
+                    plan_id if isinstance(plan_id, str) else None,
+                )
+                if result is not None
+                else None
+            )
+
+        if record is None:
+            records = self.agent_records()
+            if metadata.get("kind") == "route-planning":
+                record = records.get("route-planning:planner")
+            if record is None:
+                record = records.get(request.agentKey) or AgentRecord()
+
+        await self.websocket.send_json(
+            AgentResponse(agentKey=request.agentKey, agent=record).model_dump(
+                exclude_none=True
+            )
+        )
+
     @handles("load-context")
     async def handle_load_state(self, data: dict, *args, **kwargs) -> None:
+        experiment_context = data.get("experimentContext") or {}
+        if data.get("routePlanningResult") is not None and not experiment_context.get(
+            "routePlanningResult"
+        ):
+            data = {
+                **data,
+                "experimentContext": {
+                    **experiment_context,
+                    "routePlanningResult": data["routePlanningResult"],
+                },
+            }
+
         await super().handle_load_state(data, *args, **kwargs)
 
         # Handle legacy experiments. The previous iteration of saved

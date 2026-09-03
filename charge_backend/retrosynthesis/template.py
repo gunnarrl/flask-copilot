@@ -2,7 +2,7 @@ import asyncio
 from fastapi import WebSocket
 from charge_backend.retrosynthesis import aizynth_tools as azf
 from lc_conductor.callback_logger import CallbackLogger
-from typing import Optional, Union, TYPE_CHECKING
+from typing import Any, Optional, Union, TYPE_CHECKING
 from collections import deque
 
 from charge_backend.backend_helper_funcs import (
@@ -17,12 +17,14 @@ from charge_backend.moleculedb.molecule_naming import (
     smiles_to_html,
     MolNameFormat,
 )
+from charge_backend.retrosynthesis import route_planner
 from charge_backend.moleculedb.purchasable import is_purchasable
 from charge_backend.retrosynthesis.database import find_exact_reactions
 from charge_backend.retrosynthesis.mapping import build_mapped_reaction_dict_or_none
 
 if TYPE_CHECKING:
     import aizynthfinder.reactiontree
+    from charge_backend.flask_experiment import FlaskExperiment
 
 
 def _create_retro_planner_sync(config_file: str) -> azf.RetroPlanner:
@@ -31,12 +33,71 @@ def _create_retro_planner_sync(config_file: str) -> azf.RetroPlanner:
 
 def _run_retro_planner_sync(
     planner: azf.RetroPlanner, smiles: str
-) -> tuple[list[azf.ReactionPath], list]:
+) -> tuple[list[dict[str, Any]], list]:
     _, _, routes = planner.plan(smiles)
     trees = []
     if planner.finder is not None:
         trees = planner.finder.routes.reaction_trees
     return routes, trees
+
+
+def rank_template_routes(
+    smiles: str,
+    routes: list[dict[str, Any]],
+    trees: list[Any],
+    route_limit: int = 10,
+) -> tuple[list[dict[str, Any]], list[Any], list[route_planner.RouteCandidate], int]:
+    route_candidates_idx = []
+    route_candidates = []
+    for index, route in enumerate(routes):
+        candidate = route_planner.make_route_candidate(smiles, route)
+        route_candidates_idx.append((candidate, index))
+        route_candidates.append(candidate)
+
+    eligible_route_count = sum(
+        candidate.all_leaves_in_stock for candidate in route_candidates
+    )
+    selected_candidates = route_planner.select_diverse_routes(
+        route_planner.prefer_unique_route_signatures(
+            route_planner.rank_routes(route_candidates)
+        ),
+        limit=route_limit,
+        similarity_function=route_planner.aizynth_route_similarity,
+    )
+
+    candidate_to_idx = {}
+    for candidate, index in route_candidates_idx:
+        candidate_to_idx.setdefault(candidate.route_id, index)
+
+    ranked_routes = []
+    ranked_trees = []
+    for candidate in selected_candidates:
+        index = candidate_to_idx[candidate.route_id]
+        ranked_routes.append(routes[index])
+        ranked_trees.append(trees[index])
+
+    return ranked_routes, ranked_trees, selected_candidates, eligible_route_count
+
+
+async def enumerate_template_route_candidates(
+    config_file: str,
+    smiles: str,
+    k: int = 10,
+) -> list[route_planner.RouteCandidate]:
+    """Return ranked template-route evidence for a target SMILES.
+
+    These are AiZynthFinder template routes for planning context, not validated
+    experimental routes.
+    """
+    planner = await asyncio.to_thread(_create_retro_planner_sync, config_file)
+    routes, trees = await asyncio.to_thread(_run_retro_planner_sync, planner, smiles)
+    _, _, selected_candidates, _ = rank_template_routes(
+        smiles,
+        routes,
+        trees,
+        route_limit=k,
+    )
+    return selected_candidates
 
 
 async def generate_nodes_for_molecular_graph(
@@ -263,12 +324,109 @@ Reaction SMARTS: `{root_smarts}`""",
     )
 
 
+async def run_ranked_retro_planner(
+    config_file: str,
+    smiles: str,
+    clogger: CallbackLogger,
+    run_settings: FlaskRunSettings,
+    reaction_id: str = "azf",
+    all_inactive: bool = False,
+    route_limit: int = 10,
+) -> tuple[
+    Reaction | None, list[azf.ReactionPath], list[route_planner.RouteCandidate]
+]:
+    """
+    Runs AiZynthFinder (template-based multi-step retrosynthesis) on the given
+    SMILES string and returns a Reaction object with all the alternatives found.
+
+    :param config_file: Path to AiZynthFinder configuration yml file
+    :param smiles: SMILES string to use
+    :param clogger: Logger object that can return messages to the UI
+    :param run_settings: Desired run settings
+    :param reaction_id: An optional string for a unique reaction ID
+    :param all_inactive: If True, does not activate the first alternative
+    :return: A 2-tuple of (Reaction object, list of routes) if routes found, or
+             ``(None, [])`` if nothing was discovered.
+    """
+    await clogger.info(f"Running Ranked RetroPlanner for SMILES: {smiles}")
+    report_init = False
+    if azf.RetroPlanner.finder is None:
+        report_init = True
+        await clogger.info("Initializing AiZynthFinder")
+    planner = await asyncio.to_thread(_create_retro_planner_sync, config_file)
+    if report_init:
+        await clogger.info(
+            "AiZynthFinder initialization complete. Planning synthesis routes..."
+        )
+        await asyncio.sleep(0)
+
+    routes, trees = await asyncio.to_thread(_run_retro_planner_sync, planner, smiles)
+    ranked_routes, ranked_trees, selected_candidates, eligible_route_count = (
+        rank_template_routes(
+            smiles,
+            routes,
+            trees,
+            route_limit=route_limit,
+        )
+    )
+
+    assert planner.finder is not None
+    await clogger.info(
+        f"Generated {len(routes)} routes for {smiles}; "
+        f"{eligible_route_count} have all leaves in stock; "
+        f"retained {len(ranked_routes)} ranked routes."
+    )
+
+    if len(ranked_routes) == 0:  # No routes found
+        return None, [], []
+
+    rpaths = [azf.ReactionPath(route) for route in ranked_routes]
+
+    # All other routes become reaction alternatives
+    alts: list[ReactionAlternative] = []
+    for i, rpath in enumerate(rpaths):
+        alt = make_reaction_alternative(
+            rpath, i, ranked_trees[i], run_settings.molecule_name_format, all_inactive
+        )
+        if alt is not None:
+            alts.append(alt)
+
+    try:
+        root_smarts = next(iter(ranked_trees[0].reactions())).metadata.get("template")
+    except StopIteration:
+        return None, [], []
+    try:
+        root_prevalence = next(iter(ranked_trees[0].reactions())).metadata.get(
+            "library_occurence"
+        )
+    except StopIteration:
+        return None, [], []
+    return (
+        Reaction(
+            reaction_id,
+            f"""Reaction found with AiZynthFinder
+
+Pattern occurrences in database: {root_prevalence}
+
+Reaction SMARTS: `{root_smarts}`""",
+            highlight="yellow",
+            label="Template",
+            alternatives=alts,
+            templatesSearched=True,
+        ),
+        rpaths,
+        selected_candidates,
+    )
+
+
 async def template_based_retrosynthesis(
     start_smiles: str,
     config_file: str,
     context: GraphContext,
     websocket: WebSocket,
     run_settings: FlaskRunSettings,
+    mode: str = "single",
+    experiment: "FlaskExperiment | None" = None,
 ):
     """Stream positioned nodes and edges"""
     clogger = CallbackLogger(websocket, source="template_based_retrosynthesis")
@@ -323,9 +481,14 @@ async def template_based_retrosynthesis(
         return
 
     await clogger.info("Running AiZynthFinder...")
-    reaction, routes = await run_retro_planner(
-        config_file, start_smiles, clogger, run_settings
-    )
+    if mode == "single":
+        reaction, routes = await run_retro_planner(
+            config_file, start_smiles, clogger, run_settings
+        )
+    else:
+        reaction, routes, selected_candidates = await run_ranked_retro_planner(
+            config_file, start_smiles, clogger, run_settings
+        )
     if not reaction:
         await clogger.info(
             f"No synthesis routes found for {start_smiles}.",
