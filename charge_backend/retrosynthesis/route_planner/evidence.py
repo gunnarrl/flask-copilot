@@ -19,14 +19,6 @@ REACTIONDB_PARSER_PATH = os.getenv(
     "FLASK_REACTION_DB_PARSER",
     os.path.join(os.path.dirname(REACTIONDB_PATH), "parse_entry.py"),
 )
-QUALITY_PRIORITIES = {
-    "S": 0,
-    "A": 1,
-    "B": 2,
-    "C": 3,
-    "D": 4,
-    "unknown": 5,
-}
 REACTIONDB_HANDLE = None
 ReactionEntryParser = Callable[[str, dict[str, Any]], Any]
 db_entry_to_reaction: ReactionEntryParser | None = None
@@ -35,11 +27,9 @@ db_entry_to_reaction: ReactionEntryParser | None = None
 @dataclass()
 class PatentEvidence:
     source_id: str
-    quality_rank: str
     matched_precursors: list[dict[str, Any]]
     product_components: list[dict[str, Any]]
     other_components: list[dict[str, Any]]
-    actions: list[dict[str, Any]]
     reported_yield: str | None
     excerpt: str
 
@@ -125,7 +115,6 @@ def evidence_from_entries(
         res.append(
             PatentEvidence(
                 source_id=entry.name,
-                quality_rank=entry.quality_rank,
                 excerpt=entry.text,
                 matched_precursors=matched_components,
                 product_components=[
@@ -139,7 +128,6 @@ def evidence_from_entries(
                     if comp.get("role") != "Product"
                     and id(comp) not in matched_component_ids
                 ],
-                actions=entry.actions,
                 reported_yield=(
                     f"{entry.reaction_yield:g}"
                     if entry.reaction_yield >= 0
@@ -151,7 +139,6 @@ def evidence_from_entries(
     return sorted(
         res,
         key=lambda entry: (
-            QUALITY_PRIORITIES.get(entry.quality_rank, 99),
             -_reported_yield_sort_value(entry.reported_yield),
             entry.source_id,
         ),

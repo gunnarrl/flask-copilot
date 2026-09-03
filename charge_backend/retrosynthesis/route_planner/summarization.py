@@ -201,10 +201,7 @@ def _format_step(index: int, step: dict[str, Any]) -> list[str]:
 
 
 def _format_patent_evidence(evidence: dict[str, Any]) -> list[str]:
-    lines = [
-        f"  - Source: {evidence.get('source_id', 'unknown')}",
-        f"    Quality rank: {evidence.get('quality_rank', 'unknown')}",
-    ]
+    lines = [f"  - Source: {evidence.get('source_id', 'unknown')}"]
     if evidence.get("reported_yield"):
         lines.append(f"    Reported yield: {evidence['reported_yield']}")
     lines.extend(
@@ -214,9 +211,6 @@ def _format_patent_evidence(evidence: dict[str, Any]) -> list[str]:
     lines.extend(
         _format_components("Other components", evidence.get("other_components", []))
     )
-    for action in evidence.get("actions", []):
-        text = action.get("text") or ""
-        lines.append(f"    Action: {action.get('type', 'unspecified')} - {text}")
     if evidence.get("excerpt"):
         lines.append(f"    Excerpt: {evidence['excerpt']}")
     return lines

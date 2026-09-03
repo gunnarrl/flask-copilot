@@ -7,7 +7,6 @@ def test_evidence_matches_all_precursors_and_preserves_patent_details():
     entries = [
         SimpleNamespace(
             name="US20090082592A1_0049",
-            quality_rank="S",
             text="The mixture was heated.",
             components=[
                 {"role": "Reactant", "name": "ethanol", "smiles": "CCO"},
@@ -20,7 +19,6 @@ def test_evidence_matches_all_precursors_and_preserves_patent_details():
                 },
                 {"role": "Agent", "name": "acid"},
             ],
-            actions=[{"type": "Heat", "text": "The mixture was heated."}],
             reaction_yield=75.0,
         )
     ]

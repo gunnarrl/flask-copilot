@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from fastapi import WebSocket
 import os
 from typing import Annotated, Any, Callable
@@ -38,8 +38,6 @@ class ReactionDBEntry:
     text: str
     components: list[dict[str, Any]]
     reaction_yield: float = -1.0
-    quality_rank: str = "unknown"
-    actions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def generate_hover_info(entry: ReactionDBEntry) -> str:

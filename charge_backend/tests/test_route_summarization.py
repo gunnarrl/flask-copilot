@@ -20,11 +20,9 @@ def test_summarization_sends_contracted_route_and_patent_evidence_to_agent(
     candidate = route_planner.make_route_candidate("P", route)
     evidence = route_planner.PatentEvidence(
         source_id="US1",
-        quality_rank="S",
         matched_precursors=[{"role": "Reactant", "name": "A", "smiles": "A"}],
         product_components=[{"role": "Product", "name": "P", "smiles": "P"}],
         other_components=[{"role": "Agent", "name": "acid"}],
-        actions=[{"type": "Stir", "text": "Stir overnight."}],
         reported_yield="82",
         excerpt="A was converted to P.",
     )
@@ -49,5 +47,4 @@ def test_summarization_sends_contracted_route_and_patent_evidence_to_agent(
     assert result[0].summary.route_id == candidate.route_id
     assert "Contracted unique reactions: 1" in experiment.task.user_prompt
     assert "Source: US1" in experiment.task.user_prompt
-    assert "Stir overnight." in experiment.task.user_prompt
     assert candidate.route_id not in experiment.task.user_prompt
