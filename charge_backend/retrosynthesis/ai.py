@@ -46,21 +46,21 @@ Target:
 - Polymer rule: if `*` appears, it marks polymer repeat-unit boundaries
 
 Task:
-Find the best one-step retrosynthetic path to the target. Use available tools to verify each candidate; if a required tool is unavailable, perform the
-same check by chemical reasoning.
+Find the best-ranked one-step retrosynthetic path to the target.
 
 Requirements:
 1. Identify the key bond formation, functional group transformation, or disconnection that most directly explains the target.
 2. Propose candidate reactants for a single retrosynthetic step.
 3. Verify that each proposed reactant SMILES is syntactically valid.
 4. Check whether the proposed reactants are chemically plausible and reasonably synthesizable.
-5. Evaluate the implied forward reaction. The reactants should regenerate the target in one step without adding, deleting, or rearranging unrelated atoms.
-6. If `predict_reaction_products` is available, use it to predict products from the proposed reactants, then canonicalize and compare the predicted
-product with the target. If there is any inconsistency log it and try some other set of reactants.
-7. If prediction tools are unavailable, perform the same forward-product equivalence check by chemical reasoning.
-8. If a candidate fails validation or there is any inconsistency, diagnose the issue, log it, and try another candidate.
-9. Choose the best validated step.
-10. Return the selected reactants and regenerated product as SMILES.
+5. Evaluate the implied forward reaction using available tools and chemical reasoning. 
+The reactants should regenerate the target in one step without adding, deleting, 
+or rearranging unrelated atoms. In particular, if `predict_reaction_products` is available, 
+use it to predict products from the proposed reactants, then canonicalize and compare the predicted product with the target. 
+If prediction tools are unavailable, perform the same forward-product equivalence check using chemical reasoning.
+6. If a candidate fails validation or there is any inconsistency, diagnose and log the issue, then try another candidate.
+7. Choose the best validated step according to the ranking criteria below.
+8. Return the selected reactants and regenerated product as SMILES.
 
 Ranking criteria:
 - exact or near-exact forward-product equivalence to target
