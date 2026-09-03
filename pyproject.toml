@@ -14,7 +14,7 @@ dependencies = [
     "charge>=0.1.0",
     "lc_conductor>=0.1.0",
     "flask_tools>=0.1.0",
-    "mcp>=1.10.0",
+    "fastmcp>=3.0.0, <4.0.0",
     "jsonschema>=4.17.3",
     "loguru>=0.7.0",
     "pydantic>=2.11.0",
@@ -32,6 +32,9 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["charge_backend*"]
+
+[tool.setuptools.package-data]
+"charge_backend.lmo" = ["prompts/*.txt"]
 
 # This creates the console script
 [project.scripts]

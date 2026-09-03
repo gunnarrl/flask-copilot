@@ -18,7 +18,10 @@ from charge_backend.moleculedb.molecule_naming import (
     MolNameFormat,
 )
 from charge_backend.retrosynthesis import route_planner
-from charge_backend.moleculedb.purchasable import is_purchasable
+from charge_backend.moleculedb.purchasable import (
+    is_purchasable,
+    purchasable_summary,
+)
 from charge_backend.retrosynthesis.database import find_exact_reactions
 from charge_backend.retrosynthesis.mapping import build_mapped_reaction_dict_or_none
 
@@ -136,10 +139,7 @@ async def generate_nodes_for_molecular_graph(
         node_id_str = retro_synth_context.new_node_id()
         hover_info = f"# Molecule\n\n**SMILES:** {smiles}\n\n"
         mol_sources = is_purchasable(smiles)
-        if mol_sources:
-            purchasable_str = f"Yes (via {', '.join(mol_sources)})"
-        else:
-            purchasable_str = "No"
+        purchasable_str = purchasable_summary(mol_sources)
         hover_info += f"**Purchasable**? {purchasable_str}\n"
 
         node = Node(
@@ -435,10 +435,7 @@ async def template_based_retrosynthesis(
     # Generate root node
     context.reset()  # Clear context
     mol_sources = is_purchasable(start_smiles)
-    if mol_sources:
-        purchasable_str = f"Yes (via {', '.join(mol_sources)})"
-    else:
-        purchasable_str = "No"
+    purchasable_str = purchasable_summary(mol_sources)
     root = Node(
         id="node_0",
         smiles=start_smiles,

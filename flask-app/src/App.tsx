@@ -1060,7 +1060,12 @@ const ChemistryTool: React.FC = () => {
         propertyType === 'custom' ? customPropertyName : PROPERTY_NAMES[propertyType];
       experimentName = `Optimizing ${propertyName} for ${smiles}`;
     } else if (problemType === 'retrosynthesis') {
-      experimentName = `Synthesizing ${smiles}`;
+      // For multi-line (multi-step) input, name after the first reaction's product.
+      const firstLine = smiles.split('\n')[0].trim();
+      const target = firstLine.includes('>')
+        ? firstLine.split('>').pop()?.trim() || firstLine
+        : firstLine;
+      experimentName = `Synthesizing ${target}`;
     } else if (problemType === 'route-planning') {
       experimentName = `Planning routes for ${smiles}`;
     }
@@ -2863,15 +2868,30 @@ const ChemistryTool: React.FC = () => {
             <div className="card card-padding mb-6">
               <div className="input-row">
                 <div className="flex-1">
-                  <label className="form-label">Starting Molecule (SMILES)</label>
-                  <input
-                    type="text"
-                    value={smiles}
-                    onChange={(e) => setSmiles(e.target.value)}
-                    disabled={isComputing}
-                    placeholder="Enter SMILES notation"
-                    className="form-input text-lg"
-                  />
+                  <label className="form-label">
+                    {problemType === 'optimization'
+                      ? 'Starting Molecule (SMILES)'
+                      : 'Starting Molecule (SMILES) or Reaction (reaction SMILES)'}
+                  </label>
+                  {problemType === 'optimization' ? (
+                    <input
+                      type="text"
+                      value={smiles}
+                      onChange={(e) => setSmiles(e.target.value)}
+                      disabled={isComputing}
+                      placeholder="Enter SMILES notation"
+                      className="form-input text-lg"
+                    />
+                  ) : (
+                    <textarea
+                      value={smiles}
+                      onChange={(e) => setSmiles(e.target.value)}
+                      disabled={isComputing}
+                      placeholder="Enter SMILES or reaction SMILES (one reaction per line for multi-step)"
+                      rows={Math.min(Math.max(smiles.split('\n').length, 1), 8)}
+                      className="form-input text-lg resize-y"
+                    />
+                  )}
                 </div>
                 <div className="flex-0.5">
                   <div>
