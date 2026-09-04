@@ -2065,7 +2065,6 @@ const ChemistryTool: React.FC = () => {
       selectedFixOptions: RouteEvaluationFixOption[],
       query: string
     ): void => {
-      markAgentChatActive('route-planning:evaluator');
       markAgentChatActive('route-planning:planner');
       setIsComputing(true);
       sendMessageToServer('route-planning-apply-fixes', {

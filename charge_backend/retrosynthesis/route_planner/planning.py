@@ -771,14 +771,10 @@ async def apply_evaluator_fixes_to_route_plan(
     experiment: "FlaskExperiment",
     tool_runtime: "ToolRuntime | None" = None,
     planner_agent_key: str | None = "route-planning:planner",
-    evaluator_agent_key: str | None = "route-planning:evaluator",
     user_guidance: str | None = None,
     selected_fix_options: list[RouteEvaluationFixOption] | None = None,
     planner_callback: "AgentCallbackType" = None,
-    evaluator_callback: "AgentCallbackType" = None,
-    pipette_status_callback: Callable[[str], Awaitable[None]] | None = None,
-    status_callback: Callable[[str], Awaitable[None]] | None = None,
-) -> RouteEvaluationDecision:
+) -> CandidateRoutePlan:
     plan_index, plan = find_route_plan(result, plan_id)
     if plan.evaluation is None:
         raise ValueError(f"Route plan has no evaluator feedback: {plan_id}")
@@ -794,19 +790,7 @@ async def apply_evaluator_fixes_to_route_plan(
         callback=planner_callback,
     )
     result.candidate_routes[plan_index] = revised_plan
-
-    evaluation = await evaluate_route_plan(
-        result.target_smiles,
-        revised_plan,
-        experiment,
-        tool_runtime,
-        route_context_items=result.route_context_items,
-        agent_key=evaluator_agent_key,
-        callback=evaluator_callback,
-        pipette_status_callback=pipette_status_callback,
-        status_callback=status_callback,
-    )
-    return route_evaluation_decision(result, plan_id, revised_plan, evaluation)
+    return revised_plan
 
 
 def continue_with_evaluated_route_plan(

@@ -848,15 +848,11 @@ class FlaskActionManager(ActionManager):
                 "route-planning:planner",
                 data,
             )
-            evaluator_callback = self._route_planning_callback(
-                "route-planning:evaluator",
-                data,
-            )
             fix_options = [
                 route_planner.RouteEvaluationFixOption.model_validate(option)
                 for option in data.get("selectedFixOptions", [])
             ]
-            decision = await self._run_in_route_plan_branch(
+            await self._run_in_route_plan_branch(
                 result,
                 plan_id,
                 lambda: route_planner.apply_evaluator_fixes_to_route_plan(
@@ -867,32 +863,17 @@ class FlaskActionManager(ActionManager):
                     user_guidance=str(data.get("query") or ""),
                     selected_fix_options=fix_options,
                     planner_callback=planner_callback,
-                    evaluator_callback=evaluator_callback,
-                    pipette_status_callback=partial(
-                        self._send_processing_message,
-                        source="Pipette",
-                        agentKey="route-planning:evaluator",
-                        eventKind="status",
-                    ),
-                    status_callback=partial(
-                        self._send_processing_message,
-                        source="Route Evaluator",
-                        agentKey="route-planning:evaluator",
-                        eventKind="status",
-                    ),
                 ),
                 latest_user_message=str(data.get("query") or ""),
-                latest_assistant_message=lambda decision: decision.message
-                or "Evaluator fixes were applied and the revised route was evaluated.",
+                latest_assistant_message=(
+                    "Evaluator fixes were applied. The revised route is unevaluated."
+                ),
             )
             await planner_callback.drain()
-            await evaluator_callback.drain()
             await self.websocket.send_json(
                 {
-                    "type": "route-planning-evaluation-response",
-                    "decision": route_planner.route_evaluation_decision_payload(
-                        decision
-                    ),
+                    "type": "route-planning-result-response",
+                    "result": route_planner.route_planning_result_payload(result),
                 }
             )
             await self.websocket.send_json({"type": "complete"})

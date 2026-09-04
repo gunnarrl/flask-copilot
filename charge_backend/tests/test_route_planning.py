@@ -148,30 +148,21 @@ def test_blocking_evaluation_requires_a_user_decision():
     assert result.candidate_routes[0].evaluation == blocking_evaluation()
 
 
-def test_applying_evaluator_fix_revises_and_reevaluates_the_plan():
+def test_applying_evaluator_fix_returns_an_unevaluated_revised_plan():
     result = make_result("Original")
     result.candidate_routes[0].evaluation = blocking_evaluation()
-    accepted = route_planner.RouteEvaluationOutputSchema(
-        accepted=True,
-        summary="The revised route is acceptable.",
-    )
-    experiment = FakeExperiment(
-        route_draft("Fixed route").model_dump_json(),
-        accepted.model_dump_json(),
-    )
+    experiment = FakeExperiment(route_draft("Fixed route").model_dump_json())
 
-    decision = asyncio.run(
+    revised = asyncio.run(
         route_planner.apply_evaluator_fixes_to_route_plan(result, "plan_1", experiment)
     )
 
-    assert decision.accepted is True
-    assert decision.needs_user_decision is False
-    assert result.candidate_routes[0].plan.title == "Fixed route"
-    assert result.candidate_routes[0].evaluation == accepted
-    assert experiment.agent_keys == [
-        "route-planning:planner",
-        "route-planning:evaluator",
-    ]
+    assert revised is result.candidate_routes[0]
+    assert revised.plan_id == "plan_1"
+    assert revised.plan.title == "Fixed route"
+    assert revised.evaluation is None
+    assert revised.needs_user_decision is False
+    assert experiment.agent_keys == ["route-planning:planner"]
 
 
 def test_selecting_a_multistep_plan_builds_a_connected_graph(monkeypatch):
