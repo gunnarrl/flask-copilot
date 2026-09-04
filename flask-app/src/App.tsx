@@ -1382,7 +1382,7 @@ const ChemistryTool: React.FC = () => {
               needsUserDecision ? recommendedIssueFixOptions(issues) : {}
             );
             setRouteIssueFeedbackText('');
-            if (decision?.plan_id && !needsUserDecision) {
+            if (decision?.accepted && decision.plan_id && !needsUserDecision) {
               routePlanIdToSelect = decision.plan_id;
             }
             break;

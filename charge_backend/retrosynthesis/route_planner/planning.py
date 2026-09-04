@@ -815,11 +815,10 @@ def continue_with_evaluated_route_plan(
 ) -> RouteEvaluationDecision:
     _, plan = find_route_plan(result, plan_id)
     plan.needs_user_decision = False
-    accepted = plan.evaluation.accepted if plan.evaluation else False
     return RouteEvaluationDecision(
         result=result,
         plan_id=plan_id,
-        accepted=accepted,
+        accepted=True,
         needs_user_decision=False,
         message=None,
     )
@@ -842,8 +841,7 @@ def route_evaluation_decision(
     evaluation: RouteEvaluationOutputSchema,
 ) -> RouteEvaluationDecision:
     needs_decision = bool(evaluation.issues)
-    if needs_decision:
-        evaluation.accepted = False
+    evaluation.accepted = not needs_decision
     plan.needs_user_decision = needs_decision
     return RouteEvaluationDecision(
         result=result,
