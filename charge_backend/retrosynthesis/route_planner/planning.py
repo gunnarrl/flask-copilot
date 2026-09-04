@@ -135,8 +135,11 @@ ROUTE_PLANNER_SYSTEM_PROMPT = (
 )
 
 ROUTE_EVALUATOR_SYSTEM_PROMPT = (
-    "You evaluate a proposed retrosynthesis route for a human chemist. "
-    "Use available tools and evidence to identify chemistry risks clearly."
+    "You evaluate whether a proposed retrosynthesis route is coherent and "
+    "chemically plausible enough for a human chemist to pursue or review. "
+    "Do not require a complete laboratory procedure. Distinguish concrete "
+    "route defects from non-blocking uncertainty, and recommend the smallest "
+    "viable route correction when a defect exists."
 )
 
 ROUTE_PLAN_QA_SYSTEM_PROMPT = (
@@ -307,17 +310,29 @@ Original route evidence:
 {relevant_route_context}
 
 Evaluation rules:
-1. Decide whether the route is acceptable for the user to continue reviewing.
-2. Check that the materialized tree plausibly makes the target from the stated precursors.
-3. Use available tools when they can check SMILES validity, purchasability,
-   reaction evidence, forward prediction, or synthesizability.
-4. Put only blocking or major concerns in issues. Each issue must include 1-3
-   concrete fix_options, and exactly one option should have recommended=true.
-   Fix options should be actions the planner can apply.
-5. Put minor concerns, uncertainty, or optional follow-up checks in warnings or
-   notes instead of issues.
-6. Ignore extra byproducts added by Pipette fixed/balanced reactions when the
-   target product and planned route tree are otherwise correct.
+1. Accept the route when it is coherent and chemically plausible enough to
+   pursue, review, or materialize; it need not be a complete laboratory procedure.
+   Missing conditions, uncertain yield, limited precedent, low confidence, optional
+   verification, and other non-invalidating concerns are warnings or notes and never
+   prevent acceptance. Missing experimental detail alone is not an issue.
+2. An issue is a concrete defect that requires changing the plan before pursuing
+   it, such as invalid chemistry or connectivity, an implausible key transformation,
+   an unusable starting material, or another major blocker. Identify the affected
+   step when possible and explain the concrete failure. Reserve high severity for
+   route-invalidating failures; medium severity requires a meaningful correction.
+3. A clearly labeled template-only, hybrid, or proposed step is not automatically
+   an issue when chemically plausible. Use available tools when they can materially
+   check the route, but failed, unavailable, or inconclusive tools do not prove a
+   defect.
+4. Ignore extra balancing byproducts added by Pipette unless they change the
+   intended transformation or target.
+5. Give each issue 1-3 self-contained fix_options that directly describe a concrete
+   revision the planner can apply. Prefer the smallest viable change, such as
+   correcting one precursor, replacing one reaction, or adjusting one step, while
+   preserving the target, viable strategy, evidence, and unaffected steps.
+6. Do not suggest generic investigation, more tool use, or literature consultation
+   as fixes; put those in warnings or notes. Mark exactly one option per issue as
+   recommended=true: the least disruptive viable correction.
 7. Return only accepted, summary, step_evidence, issues, warnings, and notes.
 """
 
@@ -355,11 +370,14 @@ Selected fix options:
 Revision rules:
 1. Return one complete revised route plan.
 2. Keep the same overall target and user intent from the previous planning context.
-3. Address the evaluator issues where possible.
-4. If selected fix options or user guidance are provided, follow them.
-5. Do not revise unrelated route options from the previous planning response.
-6. Preserve contracted reactions as single plan steps.
-7. Record any durable tool-derived findings in tool_findings_summary; do not copy
+3. Apply only the selected fix options and explicit user guidance. Do not apply
+   unselected fix options or make unrelated improvements.
+4. Make the smallest viable change needed to apply each selected fix.
+5. Preserve all unaffected steps, route strategy, evidence, and plan content.
+   Update dependent fields only when the selected change makes that necessary.
+6. Do not revise unrelated route options from the previous planning response.
+7. Preserve contracted reactions as single plan steps.
+8. Record any durable tool-derived findings in tool_findings_summary; do not copy
    raw tool output, or include non-important information.
 """
 
@@ -824,6 +842,8 @@ def route_evaluation_decision(
     evaluation: RouteEvaluationOutputSchema,
 ) -> RouteEvaluationDecision:
     needs_decision = bool(evaluation.issues)
+    if needs_decision:
+        evaluation.accepted = False
     plan.needs_user_decision = needs_decision
     return RouteEvaluationDecision(
         result=result,
