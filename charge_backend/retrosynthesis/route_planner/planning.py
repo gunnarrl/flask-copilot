@@ -92,6 +92,7 @@ class CandidateRoutePlan(BaseModel):
     plan: RoutePlanContent
     route_steps: list[RouteStep] = Field(default_factory=list)
     tool_findings_summary: list[str] = Field(default_factory=list)
+    materialized: bool = False
     evaluation: RouteEvaluationOutputSchema | None = None
     needs_user_decision: bool = False
     branch_state: dict | None = None
@@ -1224,6 +1225,7 @@ def commit_route_plan_to_graph(
 
     graph.recalculate_nodes_per_level()
     calculate_positions(list(graph.node_ids.values()))
+    plan.materialized = True
     result.selected_plan_id = plan_id
     experiment.graph_context = graph
     experiment.route_planning_result = result

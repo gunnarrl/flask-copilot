@@ -34,7 +34,7 @@ interface RoutePlanningWorkspaceProps {
   onChatAboutRoute: (planId: string, title: string) => void;
   onRefineRoute: (planId: string, title: string) => void;
   onGenerateMore: () => void;
-  onSelectPlan: (planId: string) => void;
+  onSelectPlan: (route: CandidateRoutePlan) => void;
   evaluatingPlanId?: string | null;
   onSkipEvaluation: (planId: string) => void;
   selectedPlanId?: string | null;
@@ -483,7 +483,7 @@ const RoutePlanDetails: React.FC<{
   isEvaluating: boolean;
   onChatAboutRoute: (planId: string, title: string) => void;
   onRefineRoute: (planId: string, title: string) => void;
-  onSelectPlan: (planId: string) => void;
+  onSelectPlan: (route: CandidateRoutePlan) => void;
   onSkipEvaluation: (planId: string) => void;
 }> = ({
   route,
@@ -498,6 +498,9 @@ const RoutePlanDetails: React.FC<{
   const plan = route.plan;
   const planId = route.plan_id || '';
   const actionsDisabled = !planId || isComputing;
+  const canSelectWithoutEvaluation = Boolean(
+    route.materialized || (route.evaluation?.accepted && !route.evaluation.issues?.length)
+  );
 
   return (
     <div className="space-y-5">
@@ -562,12 +565,12 @@ const RoutePlanDetails: React.FC<{
           <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() => onSelectPlan(planId)}
+              onClick={() => onSelectPlan(route)}
               disabled={actionsDisabled}
               className="btn btn-primary"
             >
               <CheckCircle className="w-4 h-4" />
-              Select Plan
+              {canSelectWithoutEvaluation ? 'Select Plan' : 'Evaluate & Select'}
             </button>
             <div className="flex flex-wrap gap-2">
               <button

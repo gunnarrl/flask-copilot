@@ -206,6 +206,7 @@ export interface CandidateRoutePlan {
   plan_id?: string | null;
   plan: RoutePlanContent;
   route_steps?: RouteStep[];
+  materialized?: boolean;
   evaluation?: RouteEvaluationOutput | null;
   needs_user_decision?: boolean;
   answer?: string;

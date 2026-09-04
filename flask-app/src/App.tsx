@@ -47,6 +47,7 @@ import {
   OptimizationCustomization,
   PdfReferenceMetadata,
   ReactionAlternative,
+  CandidateRoutePlan,
   RouteEvaluationDecision,
   RouteEvaluationFixOption,
   RouteEvaluationIssue,
@@ -2023,7 +2024,6 @@ const ChemistryTool: React.FC = () => {
     ): void => {
       markAgentChatActive(chatAgentKey || 'route-planning:planner');
       if (!rematerialize && planId === selectedRoutePlanId) {
-        setSelectedRoutePlanId(null);
         setRoutePlanningGraphVisible(false);
       }
       if (rematerialize) {
@@ -2090,6 +2090,22 @@ const ChemistryTool: React.FC = () => {
       sendMessageToServer('route-planning-select', { planId });
     },
     [sendMessageToServer]
+  );
+
+  const selectRoutePlan = useCallback(
+    (route: CandidateRoutePlan): void => {
+      const planId = route.plan_id;
+      if (!planId) return;
+      const evaluationAccepted = Boolean(
+        route.evaluation?.accepted && !route.evaluation.issues?.length
+      );
+      if (route.materialized || evaluationAccepted) {
+        sendRoutePlanSelect(planId);
+        return;
+      }
+      sendRoutePlanEvaluate(planId);
+    },
+    [sendRoutePlanEvaluate, sendRoutePlanSelect]
   );
 
   const skipRoutePlanEvaluation = useCallback(
@@ -3189,7 +3205,7 @@ const ChemistryTool: React.FC = () => {
                 onChatAboutRoute={openRoutePlanQuestionChat}
                 onRefineRoute={openRoutePlanRefineChat}
                 onGenerateMore={openRoutePlanningMoreChat}
-                onSelectPlan={sendRoutePlanEvaluate}
+                onSelectPlan={selectRoutePlan}
                 evaluatingPlanId={evaluatingRoutePlanId}
                 onSkipEvaluation={skipRoutePlanEvaluation}
                 selectedPlanId={selectedRoutePlanId}

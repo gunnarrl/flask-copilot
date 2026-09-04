@@ -95,6 +95,8 @@ def test_planner_output_becomes_stable_materialized_candidates():
 
 def test_refinement_replaces_only_the_selected_plan():
     result = make_result("Original A", "Original B")
+    result.selected_plan_id = "plan_2"
+    result.candidate_routes[0].materialized = True
     experiment = FakeExperiment(route_draft("Revised A").model_dump_json())
 
     revised = asyncio.run(
@@ -107,7 +109,9 @@ def test_refinement_replaces_only_the_selected_plan():
     )
 
     assert revised.plan.title == "Revised A"
+    assert revised.materialized is False
     assert result.candidate_routes[1].plan.title == "Original B"
+    assert result.selected_plan_id == "plan_2"
     assert experiment.agent_keys == ["route-planning:planner"]
 
 
@@ -165,7 +169,9 @@ def test_applying_evaluator_fix_returns_an_unevaluated_revised_plan():
     assert experiment.agent_keys == ["route-planning:planner"]
 
 
-def test_selecting_a_multistep_plan_builds_a_connected_graph(monkeypatch):
+def test_materializing_plans_builds_graph_and_preserves_materialization_history(
+    monkeypatch,
+):
     monkeypatch.setattr(
         "charge_backend.moleculedb.purchasable.is_purchasable", lambda smiles: []
     )
@@ -176,7 +182,7 @@ def test_selecting_a_multistep_plan_builds_a_connected_graph(monkeypatch):
             "products": kwargs["products"],
         },
     )
-    result = make_result("Two-step route")
+    result = make_result("Two-step route", "Other route")
     result.candidate_routes[0].route_steps = [
         route_planner.RouteStep(
             step_id="step_1",
@@ -194,6 +200,14 @@ def test_selecting_a_multistep_plan_builds_a_connected_graph(monkeypatch):
     graph = route_planner.commit_route_plan_to_graph(result, "plan_1", experiment)
 
     assert result.selected_plan_id == "plan_1"
+    assert result.candidate_routes[0].materialized is True
+    assert result.candidate_routes[1].materialized is False
     assert len(graph.node_ids) == 3
     assert len(graph.edges) == 2
     assert sorted(node.level for node in graph.node_ids.values()) == [0, 1, 2]
+
+    route_planner.commit_route_plan_to_graph(result, "plan_2", experiment)
+
+    assert result.selected_plan_id == "plan_2"
+    assert result.candidate_routes[0].materialized is True
+    assert result.candidate_routes[1].materialized is True
