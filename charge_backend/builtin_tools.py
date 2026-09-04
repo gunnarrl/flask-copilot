@@ -2,7 +2,7 @@ from flask_tools.chemistry.smiles_utils import (
     canonicalize_smiles,
     verify_smiles,
 )
-from typing import TYPE_CHECKING
+from typing import Awaitable, Callable, TYPE_CHECKING
 
 from charge_backend.moleculedb.purchasable import is_purchasable
 from charge_backend.retrosynthesis import route_planner
@@ -33,12 +33,15 @@ def _document_consult_tool(registry: PdfDocumentRegistry):
 def _enumerate_template_routes_tool(
     config_file: str,
     experiment: "FlaskExperiment",
+    status_callback: Callable[[str], Awaitable[None]] | None = None,
 ):
     async def enumerate_template_routes(
         smiles: str,
         k: int = 10,
     ) -> str:
         """Enumerate and summarize ranked template routes for a target SMILES."""
+        if status_callback is not None:
+            await status_callback(f"Enumerating {k} template routes for {smiles}.")
         candidates = await enumerate_template_route_candidates(config_file, smiles, k)
         if not candidates:
             return f"No template routes found for {smiles}."
@@ -60,6 +63,7 @@ def list_builtin_tool_definitions(
     pdf_registry: PdfDocumentRegistry | None = None,
     retrosynthesis_config_file: str | None = None,
     experiment: "FlaskExperiment | None" = None,
+    route_planning_status_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> list[BuiltinToolDefinition]:
     definitions = [
         BuiltinToolDefinition(
@@ -91,6 +95,7 @@ def list_builtin_tool_definitions(
         enumerate_template_routes = _enumerate_template_routes_tool(
             retrosynthesis_config_file,
             experiment,
+            route_planning_status_callback,
         )
         definitions.append(
             BuiltinToolDefinition(

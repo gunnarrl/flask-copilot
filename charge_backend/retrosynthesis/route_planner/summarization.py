@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from uuid import uuid4
 
 from .evidence import find_step_evidence
 from .ranking import (
@@ -27,16 +28,12 @@ class SummarizedRoute:
 
 
 class RouteSummarizer:
-    def __init__(
-        self,
-        experiment: "FlaskExperiment",
-        callback: "AgentCallbackType" = None,
-    ):
+    def __init__(self, experiment: "FlaskExperiment"):
         self.experiment = experiment
-        self.callback = callback
 
-    async def summarize(self, candidate: RouteCandidate) -> RouteSummary:
+    async def summarize(self, candidate: RouteCandidate) -> tuple[RouteSummary, str]:
         prompt = build_summary_prompt(route_summary_input(candidate))
+        agent_id = f"summarizer-{uuid4()}"
         try:
             from charge.tasks.task import Task
 
@@ -44,21 +41,22 @@ class RouteSummarizer:
                 system_prompt="You summarize retrosynthesis routes concisely and only use the provided route data.",
                 user_prompt=prompt,
             )
-            if self.callback is None:
-                agent = self.experiment.create_agent_with_experiment_state(task=task)
-            else:
-                agent = self.experiment.create_agent_with_experiment_state(
-                    task=task,
-                    callback=self.callback,
-                )
+            agent = self.experiment.create_agent_with_experiment_state(task=task)
+            agent_id = str(getattr(agent, "agent_key", agent_id))
             result = await agent.run()
         except Exception as exc:
-            return RouteSummary(
-                route_id=candidate.route_id,
-                summary=None,
-                error=str(exc),
+            return (
+                RouteSummary(
+                    route_id=candidate.route_id,
+                    summary=None,
+                    error=str(exc),
+                ),
+                agent_id,
             )
-        return RouteSummary(route_id=candidate.route_id, summary=str(result).strip())
+        return (
+            RouteSummary(route_id=candidate.route_id, summary=str(result).strip()),
+            agent_id,
+        )
 
 
 async def summarize_routes(
@@ -70,50 +68,52 @@ async def summarize_routes(
     status_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> list[SummarizedRoute]:
     semaphore = asyncio.Semaphore(concurrency)
-    summarizer = RouteSummarizer(experiment, callback)
+    summarizer = RouteSummarizer(experiment)
     selected_candidates = candidates[:limit]
     total = len(selected_candidates)
+
+    if status_callback is not None:
+        await status_callback(f"Summarization started for {total} routes.")
 
     async def summarize_one(
         index: int, candidate: RouteCandidate
     ) -> SummarizedRoute:
         async with semaphore:
-            if status_callback is not None:
-                await status_callback(
-                    f"Summarizer {index} started summarizing Route {index} of {total}."
-                )
-            summary = await summarizer.summarize(candidate)
+            summary, agent_id = await summarizer.summarize(candidate)
             if callback is not None:
-                call_id = f"summarize_route:{candidate.route_id}"
+                call_id = f"summarize_route:{agent_id}:{candidate.route_id}"
+                await callback.on_tool_call(
+                    "summarize_route",
+                    {"route_number": index, "route_id": candidate.route_id},
+                    source=agent_id,
+                    call_id=call_id,
+                )
                 if summary.error:
                     await callback.on_tool_result(
                         "summarize_route",
                         summary.error,
                         is_error=True,
-                        source=f"Summarizer {index}",
+                        source=agent_id,
                         call_id=call_id,
                     )
                 else:
-                    await callback.on_tool_call(
-                        "summarize_route",
-                        {"route_number": index, "route_id": candidate.route_id},
-                        source=f"Summarizer {index}",
-                        call_id=call_id,
-                    )
                     await callback.on_tool_result(
                         "summarize_route",
                         summary.summary,
-                        source=f"Summarizer {index}",
+                        source=agent_id,
                         call_id=call_id,
                     )
             return SummarizedRoute(candidate=candidate, summary=summary)
 
-    return await asyncio.gather(
+    summaries = await asyncio.gather(
         *(
             summarize_one(index, candidate)
             for index, candidate in enumerate(selected_candidates, start=1)
         )
     )
+    if status_callback is not None:
+        await status_callback(f"Summarization completed for {total} routes.")
+    return summaries
 
 
 def route_summary_input(candidate: RouteCandidate) -> dict[str, Any]:

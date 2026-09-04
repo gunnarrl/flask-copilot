@@ -7,8 +7,13 @@ from charge_backend.retrosynthesis import route_planner
 
 def template_route_tool(monkeypatch, candidates):
     callback = object()
+    events = []
+
+    async def report_status(message):
+        events.append(message)
 
     async def enumerate_routes(config_file, smiles, k):
+        assert events == ["Enumerating template routes for P."]
         assert (config_file, smiles, k) == ("config.yml", "P", 2)
         return candidates
 
@@ -44,6 +49,7 @@ def template_route_tool(monkeypatch, candidates):
                 )
             }
         ),
+        route_planning_status_callback=report_status,
     )
     return next(
         definition.function

@@ -78,6 +78,12 @@ class FlaskActionManager(ActionManager):
                 self.pdf_registry,
                 getattr(args, "config_file", None),
                 experiment=self.experiment,
+                route_planning_status_callback=partial(
+                    self._send_processing_message,
+                    source="Route Planner",
+                    agentKey="route-planning:planner",
+                    eventKind="status",
+                ),
             )
         )
 
@@ -408,9 +414,9 @@ class FlaskActionManager(ActionManager):
         )
 
         async def run_func() -> None:
-            summarizer_callback = self._route_planning_callback(
-                "route-planning:summarizer",
-                data,
+            summarizer_callback = CallbackHandler(
+                self.websocket,
+                agent_key="route-planning:summarizer",
             )
             planner_callback = self._route_planning_callback(
                 "route-planning:planner",
@@ -467,34 +473,16 @@ class FlaskActionManager(ActionManager):
                 eventKind="status",
             )
 
-            async def report_planner_progress() -> None:
-                elapsed = 0
-                while True:
-                    await asyncio.sleep(30)
-                    elapsed += 30
-                    await self._send_processing_message(
-                        "Planner is still generating candidate plans "
-                        f"({elapsed} seconds elapsed).",
-                        source="Route Planner",
-                        agentKey="route-planning:planner",
-                        eventKind="status",
-                    )
-
-            progress_task = asyncio.create_task(report_planner_progress())
-            try:
-                output = await route_planner.plan_candidate_routes(
-                    smiles,
-                    route_context,
-                    self.experiment,
-                    self.route_planner_tool_runtime(),
-                    user_request=data.get("query"),
-                    attachments=attachments,
-                    agent_key="route-planning:planner",
-                    callback=planner_callback,
-                )
-            finally:
-                progress_task.cancel()
-                await asyncio.gather(progress_task, return_exceptions=True)
+            output = await route_planner.plan_candidate_routes(
+                smiles,
+                route_context,
+                self.experiment,
+                self.route_planner_tool_runtime(),
+                user_request=data.get("query"),
+                attachments=attachments,
+                agent_key="route-planning:planner",
+                callback=planner_callback,
+            )
 
             await planner_callback.drain()
             await self._send_processing_message(

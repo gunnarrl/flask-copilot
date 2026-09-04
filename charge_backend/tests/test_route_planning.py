@@ -141,15 +141,29 @@ def blocking_evaluation():
 def test_blocking_evaluation_requires_a_user_decision():
     result = make_result("Original")
     experiment = FakeExperiment(blocking_evaluation().model_dump_json())
+    statuses = []
 
-    decision = asyncio.run(
-        route_planner.evaluate_selected_route_plan(result, "plan_1", experiment)
-    )
+    async def run():
+        async def record_status(message):
+            statuses.append(message)
+
+        return await route_planner.evaluate_selected_route_plan(
+            result,
+            "plan_1",
+            experiment,
+            status_callback=record_status,
+        )
+
+    decision = asyncio.run(run())
 
     assert decision.accepted is False
     assert decision.needs_user_decision is True
     assert "first disconnection is unsupported" in decision.message
     assert result.candidate_routes[0].evaluation == blocking_evaluation()
+    assert statuses == [
+        "Evaluator started reviewing plan_1.",
+        "Evaluator completed review of plan_1.",
+    ]
 
 
 def test_applying_evaluator_fix_returns_an_unevaluated_revised_plan():

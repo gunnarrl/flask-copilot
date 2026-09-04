@@ -600,28 +600,10 @@ async def evaluate_route_plan(
         **task_kwargs,
     )
     agent = _create_route_agent(experiment, task, agent_key, callback)
-    progress_task = None
     if status_callback is not None:
         await status_callback(f"Evaluator started reviewing {plan.plan_id}.")
-
-        async def report_progress() -> None:
-            elapsed = 0
-            while True:
-                await asyncio.sleep(30)
-                elapsed += 30
-                await status_callback(
-                    f"Evaluator is still reviewing {plan.plan_id} "
-                    f"({elapsed} seconds elapsed)."
-                )
-
-        progress_task = asyncio.create_task(report_progress())
-    try:
-        output = await agent.run()
-        evaluation = RouteEvaluationOutputSchema.model_validate_json(output)
-    finally:
-        if progress_task is not None:
-            progress_task.cancel()
-            await asyncio.gather(progress_task, return_exceptions=True)
+    output = await agent.run()
+    evaluation = RouteEvaluationOutputSchema.model_validate_json(output)
     plan.evaluation = evaluation
     plan.needs_user_decision = False
     if status_callback is not None:
