@@ -702,6 +702,7 @@ class FlaskActionManager(ActionManager):
                     {
                         "type": "route-planning-select-response",
                         "planId": plan_id,
+                        "updatedPlanId": plan_id,
                         "graphContext": graph_context.save_state(),
                         "result": route_planner.route_planning_result_payload(result),
                     }
@@ -710,6 +711,7 @@ class FlaskActionManager(ActionManager):
                 await self.websocket.send_json(
                     {
                         "type": "route-planning-result-response",
+                        "updatedPlanId": plan_id,
                         "result": route_planner.route_planning_result_payload(result),
                     }
                 )
@@ -873,6 +875,7 @@ class FlaskActionManager(ActionManager):
             await self.websocket.send_json(
                 {
                     "type": "route-planning-result-response",
+                    "updatedPlanId": plan_id,
                     "result": route_planner.route_planning_result_payload(result),
                 }
             )

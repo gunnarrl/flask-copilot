@@ -322,6 +322,7 @@ export interface WebSocketMessage {
   result?: RoutePlanningResult;
   decision?: RouteEvaluationDecision;
   planId?: string;
+  updatedPlanId?: string;
   answer?: string;
   graphContext?: GraphContextPayload;
 

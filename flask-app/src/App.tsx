@@ -447,6 +447,10 @@ const ChemistryTool: React.FC = () => {
     Record<number, RouteEvaluationFixOption | null>
   >({});
   const [routeIssueFeedbackText, setRouteIssueFeedbackText] = useState<string>('');
+  const [refinementComplete, setRefinementComplete] = useState<{
+    planId: string;
+    title: string;
+  } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const saveContextModeRef = useRef<'download' | 'sync' | null>(null);
@@ -970,6 +974,7 @@ const ChemistryTool: React.FC = () => {
   };
 
   const loadContext = (data: Experiment): void => {
+    setRefinementComplete(null);
     const loadedExperimentContext =
       data.routePlanningResult && !data.experimentContext?.routePlanningResult
         ? {
@@ -1140,6 +1145,7 @@ const ChemistryTool: React.FC = () => {
     setPendingEvaluationDecision(null);
     setSelectedIssueFixOptions({});
     setRouteIssueFeedbackText('');
+    setRefinementComplete(null);
     attachmentRegistryRef.current = {};
     setAttachmentRegistry({});
     graphState.setOffset({ x: 50, y: 50 });
@@ -1232,6 +1238,15 @@ const ChemistryTool: React.FC = () => {
         if (wsRef.current !== socket) return; // Ignore messages from old sockets
 
         const data: WebSocketMessage = JSON.parse(event.data);
+        if (data.updatedPlanId) {
+          const updatedPlan = data.result?.candidate_routes.find(
+            (route) => route.plan_id === data.updatedPlanId
+          );
+          setRefinementComplete({
+            planId: data.updatedPlanId,
+            title: updatedPlan?.plan.title || data.updatedPlanId,
+          });
+        }
 
         switch (data.type) {
           case 'node': {
@@ -1642,6 +1657,7 @@ const ChemistryTool: React.FC = () => {
     setPendingEvaluationDecision(null);
     setSelectedIssueFixOptions({});
     setRouteIssueFeedbackText('');
+    setRefinementComplete(null);
     attachmentRegistryRef.current = {};
     setAttachmentRegistry({});
     metricsDashboardState.setMetricsHistory([]);
@@ -3917,6 +3933,31 @@ const ChemistryTool: React.FC = () => {
         onReferenceDocumentSave={handleReferenceDocumentSave}
         showOptimizationTab={problemType === 'optimization'}
       />
+
+      <Modal
+        isOpen={!!refinementComplete}
+        onClose={() => setRefinementComplete(null)}
+        title="Route Updated"
+        subtitle={refinementComplete?.title}
+        size="sm"
+        footer={
+          <button
+            type="button"
+            onClick={() => setRefinementComplete(null)}
+            className="btn btn-primary"
+          >
+            Close
+          </button>
+        }
+      >
+        <div className="flex items-center gap-3 text-secondary">
+          <CheckCircle className="w-5 h-5 flex-shrink-0 text-success" />
+          <p>
+            {refinementComplete?.title || refinementComplete?.planId} has finished refinement and
+            is ready for review.
+          </p>
+        </div>
+      </Modal>
 
       <Modal
         isOpen={!!pendingEvaluationDecision}
