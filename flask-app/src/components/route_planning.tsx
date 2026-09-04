@@ -1,5 +1,6 @@
 import { RDKitModule } from '@rdkit/rdkit';
 import {
+  AlertCircle,
   ArrowLeft,
   CheckCircle,
   Loader2,
@@ -285,6 +286,33 @@ const EvaluationStatus: React.FC<{ route: CandidateRoutePlan }> = ({ route }) =>
   );
 };
 
+const EvaluationWarnings: React.FC<{ route: CandidateRoutePlan }> = ({ route }) => {
+  const warnings = route.evaluation?.warnings || [];
+  if (warnings.length === 0) return null;
+
+  return (
+    <section className="alert alert-warning">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="w-5 h-5 flex-shrink-0 text-warning" />
+        <div>
+          <h4 className="text-sm font-semibold text-warning">Evaluator Warnings</h4>
+          <ul className="mt-2 space-y-1 text-sm text-secondary">
+            {warnings.map((warning, index) => (
+              <li key={`${warning.step_id || 'route'}-${index}`}>
+                <span className="font-medium text-primary">
+                  {formatLabel(warning.severity)}
+                  {warning.step_id ? ` - ${warning.step_id}` : ''}:
+                </span>{' '}
+                {warning.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+};
+
 const PlanHeader: React.FC<{ route: CandidateRoutePlan; titleClassName: string }> = ({
   route,
   titleClassName,
@@ -410,6 +438,7 @@ export const SelectedRoutePlanPanel: React.FC<{
       </div>
 
       <p className="text-sm text-secondary leading-relaxed">{plan.route_strategy}</p>
+      <EvaluationWarnings route={route} />
       <div className="space-y-1 text-sm">
         <TextDetail label="Route value" value={plan.route_value} />
         <TextDetail label="Evidence" value={plan.evidence_overview} />
@@ -473,6 +502,8 @@ const RoutePlanDetails: React.FC<{
   return (
     <div className="space-y-5">
       <PlanHeader route={route} titleClassName="text-xl font-semibold text-primary" />
+
+      <EvaluationWarnings route={route} />
 
       <RouteTreePreview route={route} rdkitModule={rdkitModule} />
 
