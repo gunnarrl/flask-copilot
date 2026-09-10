@@ -171,6 +171,7 @@ def build_route_planning_prompt(
     route_context: RouteContext,
     user_request: str | None = None,
 ) -> str:
+    """Build the prompt used to generate candidate retrosynthesis plans."""
     # TODO(later): Add the target name, IUPAC name, and functional groups.
     prompt = f"""Target:
 - SMILES: `{target_smiles}`
@@ -266,6 +267,7 @@ async def plan_candidate_routes(
     agent_key: str | None = None,
     callback: "AgentCallbackType" = None,
 ) -> RoutePlanningOutputSchema:
+    """Run the planner agent and return structured candidate routes."""
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
         system_prompt=ROUTE_PLANNER_SYSTEM_PROMPT,
@@ -296,6 +298,7 @@ async def run_initial_route_planning(
     planner_callback: "AgentCallbackType" = None,
     status_callback: Callable[[str, str | None], Awaitable[None]] | None = None,
 ) -> tuple[RoutePlanningOutputSchema, RoutePlanningResult] | None:
+    """Enumerate, summarize, and plan initial routes for a target molecule."""
     from charge_backend.retrosynthesis.template import run_ranked_retro_planner
 
     async def report_status(message: str, agent_key: str | None = None) -> None:
@@ -379,6 +382,7 @@ def build_route_evaluation_prompt(
     pipette_context: str | None = None,
     route_context_items: list[RouteContextItem] | None = None,
 ) -> str:
+    """Build an evaluator prompt from a plan, evidence, and Pipette results."""
     plan_markdown = format_candidate_route_plan(plan)
     route_steps = format_route_steps_for_prompt(plan.route_steps)
     relevant_route_context = route_context_for_plan(plan, route_context_items or [])
@@ -434,6 +438,7 @@ def build_route_revision_prompt(
     user_guidance: str | None = None,
     selected_fix_options: list[RouteEvaluationFixOption] | None = None,
 ) -> str:
+    """Build a prompt that applies selected evaluator fixes to one plan."""
     issues = format_route_evaluation_issues_for_prompt(evaluation)
     selected_fixes = format_selected_fix_options_for_prompt(selected_fix_options or [])
     guidance = ""
@@ -477,6 +482,7 @@ def build_route_plan_question_prompt(
     plan_id: str,
     question: str,
 ) -> str:
+    """Build a prompt for answering a question about one route plan."""
     return f"""Answer the user's question about {plan_id}.
 
 User question:
@@ -488,6 +494,7 @@ def build_route_refinement_prompt(
     plan_id: str,
     user_guidance: str,
 ) -> str:
+    """Build a prompt for refining one route from user guidance."""
     return f"""Revise only {plan_id} using the user's guidance.
 
 User guidance:
@@ -503,6 +510,7 @@ Revision rules:
 def build_more_route_plans_prompt(
     user_feedback: str | None = None,
 ) -> str:
+    """Build a prompt for generating additional distinct route plans."""
     prompt = """Generate exactly 5 additional retrosynthetic route plans.
 Do not repeat the existing plans, route steps, or main disconnection patterns.
 """
@@ -514,6 +522,7 @@ Do not repeat the existing plans, route steps, or main disconnection patterns.
 def format_route_evaluation_issues_for_prompt(
     evaluation: RouteEvaluationOutputSchema,
 ) -> str:
+    """Format evaluator issues for use in a revision prompt."""
     if not evaluation.issues:
         return "- No specific evaluator issues were reported."
     lines = []
@@ -527,6 +536,7 @@ def format_route_evaluation_issues_for_prompt(
 def format_selected_fix_options_for_prompt(
     selected_fix_options: list[RouteEvaluationFixOption],
 ) -> str:
+    """Format selected evaluator fixes for use in a revision prompt."""
     if not selected_fix_options:
         return "- No evaluator fix option was selected."
     return "\n".join(
@@ -535,6 +545,7 @@ def format_selected_fix_options_for_prompt(
 
 
 def format_route_steps_for_prompt(route_steps: list[RouteStep]) -> str:
+    """Format materialized route steps for inclusion in a prompt."""
     if not route_steps:
         return "- No materialized route steps were provided."
     lines = []
@@ -553,6 +564,7 @@ def route_context_for_plan(
     plan: CandidateRoutePlan,
     route_context_items: list[RouteContextItem],
 ) -> str:
+    """Format the source-route context relevant to a candidate plan."""
     return RouteContext(items=route_context_items).format_selected(
         plan.plan.source_route_numbers
     )
@@ -563,6 +575,7 @@ async def build_pipette_reaction_context(
     callback: "AgentCallbackType" = None,
     status_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
+    """Run Pipette checks and format their results for route evaluation."""
     reaction_steps = [
         (step.step_id, step.reaction_smiles)
         for step in plan.route_steps
@@ -647,6 +660,7 @@ async def build_pipette_reaction_context(
 
 
 def pipette_fixed_reaction_smiles(grade) -> str | None:
+    """Return Pipette's fixed reaction SMILES when one was produced."""
     for result in getattr(grade, "results", []):
         if result.name != "llm_reaction_fix" or result.data is None:
             continue
@@ -667,6 +681,7 @@ async def evaluate_route_plan(
     pipette_status_callback: Callable[[str], Awaitable[None]] | None = None,
     status_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> RouteEvaluationOutputSchema:
+    """Evaluate one candidate route and store the structured result on it."""
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     pipette_context = await build_pipette_reaction_context(
         plan,
@@ -706,6 +721,7 @@ async def revise_route_plan_from_evaluation(
     selected_fix_options: list[RouteEvaluationFixOption] | None = None,
     callback: "AgentCallbackType" = None,
 ) -> CandidateRoutePlan:
+    """Create a revised candidate route from evaluator feedback."""
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
         system_prompt=ROUTE_PLANNER_SYSTEM_PROMPT,
@@ -738,6 +754,7 @@ async def answer_route_plan_question(
     agent_key: str | None = "route-planning:planner",
     callback: "AgentCallbackType" = None,
 ) -> str:
+    """Answer a user question using the selected plan's agent history."""
     _, plan = find_route_plan(result, plan_id)
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
@@ -760,6 +777,7 @@ async def refine_route_plan_from_user_guidance(
     agent_key: str | None = "route-planning:planner",
     callback: "AgentCallbackType" = None,
 ) -> CandidateRoutePlan:
+    """Replace one candidate route with a user-guided revision."""
     plan_index, _ = find_route_plan(result, plan_id)
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
@@ -787,6 +805,7 @@ async def plan_more_candidate_routes(
     agent_key: str | None = "route-planning:planner",
     callback: "AgentCallbackType" = None,
 ) -> RoutePlanningOutputSchema:
+    """Generate and append additional candidate routes to a planning result."""
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
         system_prompt=ROUTE_PLANNER_SYSTEM_PROMPT,
@@ -810,6 +829,7 @@ async def evaluate_selected_route_plan(
     pipette_status_callback: Callable[[str], Awaitable[None]] | None = None,
     status_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> RouteEvaluationDecision:
+    """Evaluate a selected plan and return the resulting workflow decision."""
     _, plan = find_route_plan(result, plan_id)
     evaluation = await evaluate_route_plan(
         result.target_smiles,
@@ -835,6 +855,7 @@ async def apply_evaluator_fixes_to_route_plan(
     selected_fix_options: list[RouteEvaluationFixOption] | None = None,
     planner_callback: "AgentCallbackType" = None,
 ) -> CandidateRoutePlan:
+    """Apply selected evaluator fixes and replace the affected route plan."""
     plan_index, plan = find_route_plan(result, plan_id)
     if plan.evaluation is None:
         raise ValueError(f"Route plan has no evaluator feedback: {plan_id}")
@@ -857,6 +878,7 @@ def continue_with_evaluated_route_plan(
     result: RoutePlanningResult,
     plan_id: str,
 ) -> RouteEvaluationDecision:
+    """Accept an evaluated route after the user chooses to continue."""
     _, plan = find_route_plan(result, plan_id)
     plan.needs_user_decision = False
     return RouteEvaluationDecision(
@@ -872,6 +894,7 @@ def find_route_plan(
     result: RoutePlanningResult,
     plan_id: str,
 ) -> tuple[int, CandidateRoutePlan]:
+    """Return a candidate route and its index by plan ID."""
     for index, plan in enumerate(result.candidate_routes):
         if plan.plan_id == plan_id:
             return index, plan
@@ -884,6 +907,7 @@ def route_evaluation_decision(
     plan: CandidateRoutePlan,
     evaluation: RouteEvaluationOutputSchema,
 ) -> RouteEvaluationDecision:
+    """Convert evaluator output into the next route-planning decision."""
     needs_decision = bool(evaluation.issues)
     evaluation.accepted = not needs_decision
     plan.needs_user_decision = needs_decision
@@ -897,6 +921,7 @@ def route_evaluation_decision(
 
 
 def route_evaluation_decision_message(evaluation: RouteEvaluationOutputSchema) -> str:
+    """Format evaluator issues as a user-facing decision message."""
     reasons = [issue.reason for issue in evaluation.issues]
     reason_text = "; ".join(reasons) if reasons else evaluation.summary
     status = (
@@ -911,6 +936,7 @@ def route_evaluation_decision_message(evaluation: RouteEvaluationOutputSchema) -
 
 
 def canonicalize_route_steps(route_steps: list[RouteStep]) -> list[RouteStep]:
+    """Canonicalize route SMILES and assign unique step identifiers."""
     canonicalized_steps = []
     seen_step_ids = set()
     for index, step in enumerate(route_steps, start=1):
@@ -957,6 +983,7 @@ def append_route_plans(
     result: RoutePlanningResult,
     output: RoutePlanningOutputSchema,
 ) -> list[CandidateRoutePlan]:
+    """Append newly generated plans with IDs that follow existing plans."""
     plan_numbers = []
     for plan in result.candidate_routes:
         if not plan.plan_id or not plan.plan_id.startswith("plan_"):
@@ -987,6 +1014,7 @@ def append_route_plans(
 def format_candidate_route_plan(
     route: CandidateRoutePlan | RoutePlanContent, index: int | None = None
 ) -> str:
+    """Format a candidate route dossier as markdown."""
     plan = route.plan if isinstance(route, CandidateRoutePlan) else route
     lines = []
     heading = plan.title if index is None else f"{index}. {plan.title}"
@@ -1040,6 +1068,7 @@ def route_planning_result_from_output(
     user_constraints: str | None = None,
     route_context: RouteContext | None = None,
 ) -> RoutePlanningResult:
+    """Convert planner output into persistent route-planning state."""
     candidate_routes = [
         CandidateRoutePlan(
             plan_id=f"plan_{index}",
@@ -1060,6 +1089,7 @@ def route_planning_result_from_output(
 
 
 def route_planning_result_payload(result: RoutePlanningResult) -> dict:
+    """Serialize route-planning state without internal branch snapshots."""
     return result.model_dump(
         mode="json",
         exclude={
@@ -1070,12 +1100,14 @@ def route_planning_result_payload(result: RoutePlanningResult) -> dict:
 
 
 def route_evaluation_decision_payload(decision: RouteEvaluationDecision) -> dict:
+    """Serialize a route-evaluation decision for the frontend."""
     payload = decision.model_dump(mode="json", exclude={"result": True})
     payload["result"] = route_planning_result_payload(decision.result)
     return payload
 
 
 def save_route_planning_branch_state(experiment: "FlaskExperiment") -> dict:
+    """Save experiment state without embedding the route-planning result."""
     return experiment.save_state(include_route_planning_result=False)
 
 
@@ -1085,6 +1117,7 @@ def build_compact_route_planner_messages(
     latest_user_message: str | None = None,
     latest_assistant_message: str | None = None,
 ) -> list[dict]:
+    """Build compact planner history containing the context and current plans."""
     route_context = RouteContext(items=result.route_context_items)
     messages = [
         Message(
@@ -1116,6 +1149,7 @@ def build_compact_route_planner_messages(
 def build_compact_route_planner_response(
     result: RoutePlanningResult,
 ) -> str:
+    """Format the durable route-planning details retained during compaction."""
     lines = ["# Route Planner Compact State"]
     if result.reasoning_summary:
         lines.extend(["", "## Reasoning Summary", result.reasoning_summary])
@@ -1152,6 +1186,7 @@ def save_compact_route_planning_branch_state(
     latest_user_message: str | None = None,
     latest_assistant_message: str | None = None,
 ) -> dict:
+    """Compact planner memory and return the resulting experiment state."""
     planner = experiment.agent_registry["route-planning:planner"].agent
     memory = json.loads(planner.save_memory())
     memory["state"]["in_memory"]["messages"] = build_compact_route_planner_messages(
@@ -1168,6 +1203,7 @@ def restore_route_planning_branch_state(
     branch_state: dict | None,
     result: RoutePlanningResult,
 ) -> None:
+    """Restore a saved branch and reattach its route-planning result."""
     if branch_state is not None:
         experiment.load_state(branch_state)
     experiment.route_planning_result = result
@@ -1179,6 +1215,7 @@ def commit_route_plan_to_graph(
     experiment: "FlaskExperiment",
     molecule_name_format: str = "brand",
 ):
+    """Materialize a selected route as the experiment's active graph."""
     from charge_backend.flask_experiment import GraphContext
 
     _, plan = find_route_plan(result, plan_id)
@@ -1285,6 +1322,7 @@ def commit_route_plan_to_graph(
 
 
 def route_step_reaction_hover_info(plan_title: str, step: RouteStep) -> str:
+    """Format graph hover information for a materialized route step."""
     lines = [f"# {plan_title}", "", f"**Step:** {step.step_id}"]
     if step.reaction_smiles:
         lines.append(f"**Reaction SMILES:** {step.reaction_smiles}")
@@ -1294,6 +1332,7 @@ def route_step_reaction_hover_info(plan_title: str, step: RouteStep) -> str:
 
 
 def format_route_planning_output(output: RoutePlanningOutputSchema) -> str:
+    """Format candidate route-planning output as markdown."""
     lines = ["# Candidate Route Plans", "", output.reasoning_summary]
 
     for index, route in enumerate(output.candidate_routes, start=1):

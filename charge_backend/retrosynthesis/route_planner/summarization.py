@@ -41,6 +41,7 @@ class RouteSummarizer:
         self.experiment = experiment
 
     async def summarize(self, candidate: RouteCandidate) -> tuple[RouteSummary, str]:
+        """Summarize one route and return its summary and summarizer agent ID."""
         prompt = build_summary_prompt(route_summary_input(candidate))
         agent_id = f"summarizer-{uuid4()}"
         try:
@@ -74,6 +75,7 @@ async def summarize_routes(
     callback: "AgentCallbackType" = None,
     status_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> list[SummarizedRoute]:
+    """Summarize route candidates concurrently while reporting their results."""
     semaphore = asyncio.Semaphore(concurrency)
     summarizer = RouteSummarizer(experiment)
     selected_candidates = candidates[:limit]
@@ -124,6 +126,7 @@ async def summarize_routes(
 
 
 def route_summary_input(candidate: RouteCandidate) -> dict[str, Any]:
+    """Build the evidence packet used to summarize a route candidate."""
     steps, starting_materials = contracted_route_summary(candidate.route)
     for step in steps:
         evidence = find_step_evidence(
@@ -148,6 +151,7 @@ def route_summary_input(candidate: RouteCandidate) -> dict[str, Any]:
 
 
 def build_summary_prompt(route_input: dict[str, Any]) -> str:
+    """Build the evidence-only route summarization prompt."""
     route_packet = format_route_summary_input(route_input)
     return f"""Summarize this proposed retrosynthesis route using only the provided route data.
 
@@ -172,6 +176,7 @@ Route evidence:
 
 
 def format_route_summary_input(route_input: dict[str, Any]) -> str:
+    """Format structured route evidence as markdown for summarization."""
     lines = [
         f"- Target SMILES: {route_input.get('target_smiles', 'unknown')}",
         f"- Contracted unique reactions: {route_input.get('contracted_unique_reactions', 'unknown')}",

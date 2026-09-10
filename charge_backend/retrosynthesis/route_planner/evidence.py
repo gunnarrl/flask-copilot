@@ -41,6 +41,7 @@ def find_step_evidence(
     precursors: list[str],
     limit: int = 3,
 ) -> list[PatentEvidence]:
+    """Find patent evidence matching a product and all requested precursors."""
     from charge_backend.retrosynthesis.database import get_reaction_database
 
     product_inchi = _smiles_to_inchi(product)
@@ -66,6 +67,7 @@ def evidence_from_entries(
     precursors: list[str],
     limit: int = 3,
 ) -> list[PatentEvidence]:
+    """Extract matching patent evidence from parsed reaction entries."""
     res = []
     precursor_counts = Counter(
         inchi

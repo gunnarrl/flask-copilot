@@ -44,11 +44,13 @@ class RouteCandidate:
 
 
 def rank_routes(routes) -> list[RouteCandidate]:
+    """Score route candidates and return them in descending rank order."""
     scored_routes = score_routes(list(routes))
     return sorted(scored_routes, key=lambda route: (-route.rank_score, route.route_id))
 
 
 def score_routes(routes: list[RouteCandidate]) -> list[RouteCandidate]:
+    """Assign a normalized practicality and evidence score to each route."""
     length_scores = _normalized_scores(
         routes, lambda route: route.contracted_unique_reactions, higher_is_better=False
     )
@@ -100,6 +102,7 @@ def select_diverse_routes(
     similarity_threshold=0.8,
     similarity_function=None,
 ):
+    """Select high-ranking routes while preferring dissimilar alternatives."""
     if not similarity_function:
         return ranked_routes[:limit]
 
@@ -130,6 +133,7 @@ def select_diverse_routes(
 
 
 def prefer_unique_route_signatures(ranked_routes: list[RouteCandidate]) -> list[RouteCandidate]:
+    """Move duplicate route signatures behind unique routes without dropping them."""
     unique = []
     duplicates = []
     seen = set()
@@ -144,6 +148,7 @@ def prefer_unique_route_signatures(ranked_routes: list[RouteCandidate]) -> list[
 
 
 def aizynth_route_similarity(first: RouteCandidate, second: RouteCandidate) -> float:
+    """Calculate AiZynthFinder route similarity between two candidates."""
     routes = [
         read_aizynthfinder_dict(first.route),
         read_aizynthfinder_dict(second.route),
@@ -152,11 +157,13 @@ def aizynth_route_similarity(first: RouteCandidate, second: RouteCandidate) -> f
 
 
 def route_id_for_route(route: dict[str, Any]) -> str:
+    """Return a stable content-derived identifier for a route tree."""
     route_json = json.dumps(route, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(route_json.encode("utf-8")).hexdigest()
 
 
 def reaction_count(route: dict[str, Any]) -> int:
+    """Count reaction nodes in a route tree."""
     count = 1 if route.get("type") == "reaction" else 0
     for child in route.get("children", []):
         count += reaction_count(child)
@@ -164,6 +171,7 @@ def reaction_count(route: dict[str, Any]) -> int:
 
 
 def route_depth(route: dict[str, Any]) -> int:
+    """Return the maximum number of reaction levels in a route tree."""
     deepest_child = 0
     for child in route.get("children", []):
         deepest_child = max(deepest_child, route_depth(child))
@@ -174,11 +182,13 @@ def route_depth(route: dict[str, Any]) -> int:
 
 
 def all_leaves_in_stock(route: dict[str, Any]) -> bool:
+    """Return whether every molecular leaf is purchasable."""
     leaves = route_leaves(route)
     return bool(leaves) and leaf_buyable_count(leaves) == len(leaves)
 
 
 def leaf_buyable_count(leaves: list[dict[str, Any]]) -> int:
+    """Count purchasable molecular leaves."""
     count = 0
     for leaf in leaves:
         smiles = leaf.get("smiles")
@@ -188,6 +198,7 @@ def leaf_buyable_count(leaves: list[dict[str, Any]]) -> int:
 
 
 def route_leaves(route: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect terminal molecule nodes from a route tree."""
     if route.get("type") == "mol" and not route.get("children"):
         return [route]
 
@@ -198,6 +209,7 @@ def route_leaves(route: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def template_occurrence(reaction: dict[str, Any]) -> int | None:
+    """Read a template occurrence count from reaction metadata."""
     metadata = reaction.get("metadata") or {}
     for key in OCCURRENCE_KEYS:
         value = metadata.get(key)
@@ -210,6 +222,7 @@ def template_occurrence(reaction: dict[str, Any]) -> int | None:
 
 
 def reaction_template(reaction: dict[str, Any] | None) -> str | None:
+    """Read the SMARTS template associated with a reaction node."""
     if reaction is None:
         return None
     metadata = reaction.get("metadata") or {}
@@ -222,6 +235,7 @@ def _normalize_template_string(template: str) -> str:
 
 
 def normalized_reaction_template(reaction: dict[str, Any] | None) -> str | None:
+    """Return the normalized SMARTS template for a reaction node."""
     template = reaction_template(reaction)
     if not template:
         return None
@@ -229,6 +243,7 @@ def normalized_reaction_template(reaction: dict[str, Any] | None) -> str | None:
 
 
 def extract_template_occurrences(route: dict[str, Any]) -> list[int]:
+    """Collect template occurrence counts from a route tree."""
     occurrences = []
 
     if route.get("type") == "reaction":
@@ -243,6 +258,7 @@ def extract_template_occurrences(route: dict[str, Any]) -> list[int]:
 
 
 def extract_policy_probabilities(route: dict[str, Any]) -> list[float]:
+    """Collect valid policy probabilities from a route tree."""
     probabilities = []
     if route.get("type") == "reaction":
         value = (route.get("metadata") or {}).get("policy_probability")
@@ -257,6 +273,7 @@ def extract_policy_probabilities(route: dict[str, Any]) -> list[float]:
 
 
 def first_reaction_child(molecule: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the first reaction child of a molecule node, if present."""
     for child in molecule.get("children", []):
         if child.get("type") == "reaction":
             return child
@@ -340,6 +357,7 @@ def add_contracted_route_steps(
     steps: list[dict[str, Any]],
     starting_materials: list[dict[str, Any]],
 ) -> None:
+    """Append contracted reaction steps and starting materials for a route branch."""
     reaction = first_reaction_child(molecule)
     if reaction is None:
         starting_materials.append(
@@ -391,6 +409,7 @@ def add_contracted_route_steps(
 
 
 def contracted_route_summary(route: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return contracted reaction steps and starting materials for a route."""
     steps = []
     starting_materials = []
     add_contracted_route_steps(
@@ -403,6 +422,7 @@ def contracted_route_summary(route: dict[str, Any]) -> tuple[list[dict[str, Any]
 
 
 def route_signature(route_steps: list[dict[str, Any]]) -> str:
+    """Build a stable signature from normalized route steps."""
     signature = []
     for step in route_steps:
         signature.append(
@@ -419,6 +439,7 @@ def route_signature(route_steps: list[dict[str, Any]]) -> str:
 
 
 def make_route_candidate(target_smiles: str, route: dict[str, Any]) -> RouteCandidate:
+    """Create a ranked-route candidate and calculate its route metrics."""
     occurrences = extract_template_occurrences(route)
     average_occurrence = sum(occurrences) / len(occurrences) if occurrences else 0.0
     probabilities = extract_policy_probabilities(route)
@@ -452,6 +473,7 @@ def make_route_candidate(target_smiles: str, route: dict[str, Any]) -> RouteCand
 
 
 def route_candidate_to_dict(candidate: RouteCandidate) -> dict[str, Any]:
+    """Serialize a route candidate to a plain dictionary."""
     return {
         "route_id": candidate.route_id,
         "target_smiles": candidate.target_smiles,

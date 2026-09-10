@@ -17,17 +17,20 @@ class RouteContext(BaseModel):
     items: list[RouteContextItem] = Field(default_factory=list)
 
     def format(self) -> str:
+        """Format all candidate routes for inclusion in a planner prompt."""
         lines = ["Candidate retrosynthesis routes:"]
         for item in self.items:
             lines.extend(["", item.text])
         return "\n".join(lines)
 
     def format_selected(self, route_numbers: list[int]) -> str:
+        """Format selected routes, falling back to all routes when none match."""
         selected = [item for item in self.items if item.route_number in route_numbers]
         return RouteContext(items=selected or self.items).format()
 
 
 def build_route_context(summarized_routes, limit=10) -> RouteContext:
+    """Build numbered planner context from summarized template routes."""
     return RouteContext(
         items=[
             RouteContextItem(
@@ -40,6 +43,7 @@ def build_route_context(summarized_routes, limit=10) -> RouteContext:
 
 
 def route_context_for_prompt(summarized_routes, limit=10):
+    """Build and format summarized template routes for a planner prompt."""
     return build_route_context(summarized_routes, limit).format()
 
 
