@@ -142,6 +142,8 @@ const routeStepsToPreviewGraph = (
         id: `${planId}:${step.step_id}`,
         label: 'FLASK',
         hoverInfo: `# ${routeTitle}\n\n${routeStepReactionHoverInfo(step)}`,
+        // Route provenance is currently plan-level, so every step uses the same highlight.
+        // TODO(later): Highlight each step using its own provenance when available.
         highlight:
           routeType === 'template_based'
             ? 'normal'
