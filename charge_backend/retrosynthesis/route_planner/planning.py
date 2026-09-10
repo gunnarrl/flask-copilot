@@ -161,6 +161,7 @@ def build_route_planning_prompt(
     route_context: RouteContext,
     user_request: str | None = None,
 ) -> str:
+    # TODO(later): Add the target name, IUPAC name, and functional groups.
     prompt = f"""Target:
 - SMILES: `{target_smiles}`
 
