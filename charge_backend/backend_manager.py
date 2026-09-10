@@ -42,7 +42,6 @@ from charge_backend.retrosynthesis.reaction_smiles import (
     reaction_smiles_retrosynthesis,
 )
 from charge_backend.retrosynthesis import route_planner
-from charge_backend.retrosynthesis.template import run_ranked_retro_planner
 from charge_backend.retrosynthesis.alternatives import set_reaction_alternative
 from charge_backend.prompt_debugger import debug_prompt
 from charge_backend.backend_helper_funcs import Node
@@ -422,88 +421,43 @@ class FlaskActionManager(ActionManager):
                 "route-planning:planner",
                 data,
             )
-            clogger = self.task_manager.clogger
-            await self._send_processing_message(
-                f"Enumerating template routes for {smiles}.",
-                source="Route Planner",
-                eventKind="status",
-            )
-            reaction, routes, selected_candidates = await run_ranked_retro_planner(
+
+            async def report_status(message: str, agent_key: str | None) -> None:
+                await self._send_processing_message(
+                    message,
+                    source="Route Planner",
+                    agentKey=agent_key,
+                    eventKind="status",
+                )
+
+            planning_run = await route_planner.run_initial_route_planning(
                 self.args.config_file,
                 smiles,
-                clogger,
+                self.task_manager.clogger,
                 self.run_settings,
+                self.experiment,
+                self.route_planner_tool_runtime(),
+                user_request=data.get("query"),
+                attachments=attachments,
+                summarizer_callback=summarizer_callback,
+                planner_callback=planner_callback,
+                status_callback=report_status,
             )
-            del reaction, routes
-            await self._send_processing_message(
-                "Template route search completed: "
-                f"{len(selected_candidates)} ranked routes selected.",
-                source="Route Planner",
-                eventKind="status",
-            )
+            await summarizer_callback.drain()
+            await planner_callback.drain()
 
-            if not selected_candidates:
+            if planning_run is None:
                 await self._send_processing_message(
                     f"No ranked template routes found for {smiles}.",
                     source="Route Planner",
                 )
                 await self.websocket.send_json({"type": "complete"})
                 return
-
-            summaries = await route_planner.summarize_routes(
-                selected_candidates,
-                self.experiment,
-                limit=10,
-                concurrency=10,
-                callback=summarizer_callback,
-                status_callback=partial(
-                    self._send_processing_message,
-                    source="Route Planner",
-                    agentKey="route-planning:summarizer",
-                    eventKind="status",
-                ),
-            )
-            await summarizer_callback.drain()
-            route_context = route_planner.build_route_context(summaries, limit=10)
-
-            await self._send_processing_message(
-                "Planner started generating candidate plans.",
-                source="Route Planner",
-                agentKey="route-planning:planner",
-                eventKind="status",
-            )
-
-            output = await route_planner.plan_candidate_routes(
-                smiles,
-                route_context,
-                self.experiment,
-                self.route_planner_tool_runtime(),
-                user_request=data.get("query"),
-                attachments=attachments,
-                agent_key="route-planning:planner",
-                callback=planner_callback,
-            )
-
-            await planner_callback.drain()
-            await self._send_processing_message(
+            await report_status(
                 "Planner completed candidate plan generation.",
-                source="Route Planner",
-                agentKey="route-planning:planner",
-                eventKind="status",
+                "route-planning:planner",
             )
-            route_planning_result = route_planner.route_planning_result_from_output(
-                smiles,
-                output,
-                user_constraints=data.get("query"),
-                route_context=route_context,
-            )
-            route_planning_result.base_branch_state = (
-                route_planner.save_compact_route_planning_branch_state(
-                    self.experiment,
-                    route_planning_result,
-                )
-            )
-            self.experiment.route_planning_result = route_planning_result
+            output, route_planning_result = planning_run
             await self._send_processing_message(
                 route_planner.format_route_planning_output(output),
                 source="Route Planner",

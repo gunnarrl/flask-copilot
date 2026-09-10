@@ -15,11 +15,13 @@ from pydantic import BaseModel, Field
 from lc_conductor import ToolRuntime
 from flask_tools.chemistry.smiles_utils import canonicalize_smiles
 
-from .context import RouteContext, RouteContextItem
+from .context import RouteContext, RouteContextItem, build_route_context
 
 if TYPE_CHECKING:
     from charge.clients.agent import AgentCallbackType
+    from charge_backend.backend_helper_funcs import FlaskRunSettings
     from charge_backend.flask_experiment import FlaskExperiment
+    from lc_conductor.callback_logger import CallbackLogger
 
 
 RoutePlanType = Literal["template_based", "hybrid", "new_proposal"]
@@ -273,6 +275,81 @@ async def plan_candidate_routes(
     agent = _create_route_agent(experiment, task, agent_key, callback)
     output = await agent.run()
     return RoutePlanningOutputSchema.model_validate_json(output)
+
+
+async def run_initial_route_planning(
+    config_file: str,
+    target_smiles: str,
+    clogger: "CallbackLogger",
+    run_settings: "FlaskRunSettings",
+    experiment: "FlaskExperiment",
+    tool_runtime: "ToolRuntime | None" = None,
+    user_request: str | None = None,
+    attachments: list[dict[str, object]] | None = None,
+    summarizer_callback: "AgentCallbackType" = None,
+    planner_callback: "AgentCallbackType" = None,
+    status_callback: Callable[[str, str | None], Awaitable[None]] | None = None,
+) -> tuple[RoutePlanningOutputSchema, RoutePlanningResult] | None:
+    from charge_backend.retrosynthesis.template import run_ranked_retro_planner
+    from .summarization import summarize_routes
+
+    async def report_status(message: str, agent_key: str | None = None) -> None:
+        if status_callback is not None:
+            await status_callback(message, agent_key)
+
+    await report_status(f"Enumerating template routes for {target_smiles}.")
+    _, _, selected_candidates = await run_ranked_retro_planner(
+        config_file,
+        target_smiles,
+        clogger,
+        run_settings,
+    )
+    await report_status(
+        "Template route search completed: "
+        f"{len(selected_candidates)} ranked routes selected."
+    )
+    if not selected_candidates:
+        return None
+
+    async def report_summarizer_status(message: str) -> None:
+        await report_status(message, "route-planning:summarizer")
+
+    summaries = await summarize_routes(
+        selected_candidates,
+        experiment,
+        limit=10,
+        concurrency=10,
+        callback=summarizer_callback,
+        status_callback=report_summarizer_status,
+    )
+    route_context = build_route_context(summaries, limit=10)
+
+    await report_status(
+        "Planner started generating candidate plans.",
+        "route-planning:planner",
+    )
+    output = await plan_candidate_routes(
+        target_smiles,
+        route_context,
+        experiment,
+        tool_runtime,
+        user_request=user_request,
+        attachments=attachments,
+        agent_key="route-planning:planner",
+        callback=planner_callback,
+    )
+    result = route_planning_result_from_output(
+        target_smiles,
+        output,
+        user_constraints=user_request,
+        route_context=route_context,
+    )
+    result.base_branch_state = save_compact_route_planning_branch_state(
+        experiment,
+        result,
+    )
+    experiment.route_planning_result = result
+    return output, result
 
 
 def _create_route_agent(
