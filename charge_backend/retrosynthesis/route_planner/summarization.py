@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable, TYPE_CHECKING
 from uuid import uuid4
 
+from charge.tasks.task import Task
+
 from .evidence import find_step_evidence
 from .ranking import (
     RouteCandidate,
@@ -42,8 +44,6 @@ class RouteSummarizer:
         prompt = build_summary_prompt(route_summary_input(candidate))
         agent_id = f"summarizer-{uuid4()}"
         try:
-            from charge.tasks.task import Task
-
             task = Task(
                 system_prompt="You summarize retrosynthesis routes concisely and only use the provided route data.",
                 user_prompt=prompt,

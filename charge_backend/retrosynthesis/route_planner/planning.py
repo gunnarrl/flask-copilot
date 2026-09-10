@@ -10,12 +10,20 @@
 import asyncio
 import json
 from typing import Awaitable, Callable, Literal, TYPE_CHECKING
+
 from agent_framework import Message
-from pydantic import BaseModel, Field
-from lc_conductor import ToolRuntime
+from charge.tasks.task import Task
 from flask_tools.chemistry.smiles_utils import canonicalize_smiles
+from lc_conductor import ToolRuntime
+from pydantic import BaseModel, Field
+
+from charge_backend.backend_helper_funcs import Edge, Node, Reaction, calculate_positions
+from charge_backend.moleculedb.molecule_naming import smiles_to_html
+from charge_backend.moleculedb.purchasable import is_purchasable
+from charge_backend.retrosynthesis.mapping import build_mapped_reaction_dict_or_none
 
 from .context import RouteContext, RouteContextItem, build_route_context
+from .summarization import summarize_routes
 
 if TYPE_CHECKING:
     from charge.clients.agent import AgentCallbackType
@@ -258,8 +266,6 @@ async def plan_candidate_routes(
     agent_key: str | None = None,
     callback: "AgentCallbackType" = None,
 ) -> RoutePlanningOutputSchema:
-    from charge.tasks.task import Task
-
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
         system_prompt=ROUTE_PLANNER_SYSTEM_PROMPT,
@@ -291,7 +297,6 @@ async def run_initial_route_planning(
     status_callback: Callable[[str, str | None], Awaitable[None]] | None = None,
 ) -> tuple[RoutePlanningOutputSchema, RoutePlanningResult] | None:
     from charge_backend.retrosynthesis.template import run_ranked_retro_planner
-    from .summarization import summarize_routes
 
     async def report_status(message: str, agent_key: str | None = None) -> None:
         if status_callback is not None:
@@ -662,8 +667,6 @@ async def evaluate_route_plan(
     pipette_status_callback: Callable[[str], Awaitable[None]] | None = None,
     status_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> RouteEvaluationOutputSchema:
-    from charge.tasks.task import Task
-
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     pipette_context = await build_pipette_reaction_context(
         plan,
@@ -703,8 +706,6 @@ async def revise_route_plan_from_evaluation(
     selected_fix_options: list[RouteEvaluationFixOption] | None = None,
     callback: "AgentCallbackType" = None,
 ) -> CandidateRoutePlan:
-    from charge.tasks.task import Task
-
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
         system_prompt=ROUTE_PLANNER_SYSTEM_PROMPT,
@@ -737,8 +738,6 @@ async def answer_route_plan_question(
     agent_key: str | None = "route-planning:planner",
     callback: "AgentCallbackType" = None,
 ) -> str:
-    from charge.tasks.task import Task
-
     _, plan = find_route_plan(result, plan_id)
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
@@ -761,8 +760,6 @@ async def refine_route_plan_from_user_guidance(
     agent_key: str | None = "route-planning:planner",
     callback: "AgentCallbackType" = None,
 ) -> CandidateRoutePlan:
-    from charge.tasks.task import Task
-
     plan_index, _ = find_route_plan(result, plan_id)
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
@@ -790,8 +787,6 @@ async def plan_more_candidate_routes(
     agent_key: str | None = "route-planning:planner",
     callback: "AgentCallbackType" = None,
 ) -> RoutePlanningOutputSchema:
-    from charge.tasks.task import Task
-
     task_kwargs = tool_runtime.task_kwargs() if tool_runtime is not None else {}
     task = Task(
         system_prompt=ROUTE_PLANNER_SYSTEM_PROMPT,
@@ -1184,16 +1179,7 @@ def commit_route_plan_to_graph(
     experiment: "FlaskExperiment",
     molecule_name_format: str = "brand",
 ):
-    from charge_backend.backend_helper_funcs import (
-        Edge,
-        Node,
-        Reaction,
-        calculate_positions,
-    )
     from charge_backend.flask_experiment import GraphContext
-    from charge_backend.moleculedb.molecule_naming import smiles_to_html
-    from charge_backend.moleculedb.purchasable import is_purchasable
-    from charge_backend.retrosynthesis.mapping import build_mapped_reaction_dict_or_none
 
     _, plan = find_route_plan(result, plan_id)
     graph = GraphContext()
