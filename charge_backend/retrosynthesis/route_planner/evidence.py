@@ -31,7 +31,7 @@ ReactionEntryParser = Callable[[str, dict[str, Any]], Any]
 db_entry_to_reaction: ReactionEntryParser | None = None
 
 
-@dataclass()
+@dataclass
 class PatentEvidence:
     source_id: str
     matched_precursors: list[dict[str, Any]]
