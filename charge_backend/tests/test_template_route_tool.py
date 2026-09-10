@@ -20,7 +20,7 @@ def template_route_tool(monkeypatch, candidates):
         events.append(message)
 
     async def enumerate_routes(config_file, smiles, k):
-        assert events == ["Enumerating template routes for P."]
+        assert events == ["Enumerating 2 template routes for P."]
         assert (config_file, smiles, k) == ("config.yml", "P", 2)
         return candidates
 
