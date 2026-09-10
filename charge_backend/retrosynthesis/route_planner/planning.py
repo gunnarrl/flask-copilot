@@ -617,10 +617,7 @@ async def build_pipette_reaction_context(
         )
     )
 
-    lines = [
-        "Pipette fixed/balanced reaction SMILES are advisory only; ignore extra "
-        "balancing byproducts when judging the planned route tree."
-    ]
+    lines = []
     for (step_id, reaction), result in zip(reaction_steps, results, strict=True):
         if isinstance(result, BaseException):
             lines.append(
