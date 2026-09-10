@@ -51,6 +51,44 @@ def test_route_candidate_contracts_consecutive_matching_templates(monkeypatch):
     assert candidate.buyable_leaf_ratio == 1.0
 
 
+def test_route_candidate_does_not_contract_differently_mapped_templates(monkeypatch):
+    monkeypatch.setattr(
+        "charge_backend.retrosynthesis.route_planner.ranking.is_purchasable",
+        lambda smiles: ["catalog"],
+    )
+    route = {
+        "type": "mol",
+        "smiles": "CCO",
+        "children": [
+            {
+                "type": "reaction",
+                "metadata": {"template": "[C:1]-[O:2]"},
+                "children": [
+                    {
+                        "type": "mol",
+                        "smiles": "CC=O",
+                        "children": [
+                            {
+                                "type": "reaction",
+                                "metadata": {"template": "[C:2]-[O:1]"},
+                                "children": [
+                                    {"type": "mol", "smiles": "CC"},
+                                    {"type": "mol", "smiles": "O"},
+                                ],
+                            }
+                        ],
+                    },
+                    {"type": "mol", "smiles": "O"},
+                ],
+            }
+        ],
+    }
+
+    candidate = route_planner.make_route_candidate("CCO", route)
+
+    assert candidate.contracted_unique_reactions == 2
+
+
 def test_ranking_and_diversity_keep_the_best_distinct_routes():
     def candidate(route_id, *, buyable, length, occurrence):
         return route_planner.RouteCandidate(

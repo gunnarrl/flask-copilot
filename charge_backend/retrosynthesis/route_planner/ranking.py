@@ -7,7 +7,6 @@
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -231,7 +230,7 @@ def reaction_template(reaction: dict[str, Any] | None) -> str | None:
 
 
 def _normalize_template_string(template: str) -> str:
-    return re.sub(r":\d+", "", template).replace(" ", "")
+    return template.replace(" ", "")
 
 
 def normalized_reaction_template(reaction: dict[str, Any] | None) -> str | None:
