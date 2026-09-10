@@ -1220,6 +1220,11 @@ def commit_route_plan_to_graph(
 
     _, plan = find_route_plan(result, plan_id)
     graph = GraphContext()
+    highlight = {
+        "template_based": "normal",
+        "hybrid": "yellow",
+        "new_proposal": "red",
+    }[plan.plan.route_type]
     node_ids_by_key = {}
     node_count = 0
     edge_count = 0
@@ -1285,7 +1290,7 @@ def commit_route_plan_to_graph(
         product_node.reaction = Reaction(
             id=f"{plan_id}:{step.step_id}",
             hoverInfo=route_step_reaction_hover_info(plan.plan.title, step),
-            highlight="red",
+            highlight=highlight,
             label="FLASK",
             templatesSearched=False,
             mappedReaction=build_mapped_reaction_dict_or_none(

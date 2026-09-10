@@ -226,6 +226,11 @@ def test_materializing_plans_builds_graph_and_preserves_materialization_history(
     assert len(graph.node_ids) == 3
     assert len(graph.edges) == 2
     assert sorted(node.level for node in graph.node_ids.values()) == [0, 1, 2]
+    assert all(
+        node.reaction.highlight == "normal"
+        for node in graph.node_ids.values()
+        if node.reaction is not None
+    )
 
     route_planner.commit_route_plan_to_graph(result, "plan_2", experiment)
 
