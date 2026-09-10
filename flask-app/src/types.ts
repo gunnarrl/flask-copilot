@@ -198,7 +198,7 @@ export interface RoutePlanContent {
   key_disconnections?: string[];
   proposed_starting_materials?: string[];
   key_risks?: string[];
-  next_checks?: string[];
+  questions_to_evaluate?: string[];
   assumptions?: string[];
 }
 

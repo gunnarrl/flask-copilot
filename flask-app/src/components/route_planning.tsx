@@ -354,7 +354,7 @@ const PlanningNotes: React.FC<{ plan: RoutePlanContent }> = ({ plan }) => {
   const hasNotes =
     Boolean(plan.assumptions?.length) ||
     Boolean(plan.key_disconnections?.length) ||
-    Boolean(plan.next_checks?.length);
+    Boolean(plan.questions_to_evaluate?.length);
 
   if (!hasNotes) return null;
 
@@ -366,7 +366,7 @@ const PlanningNotes: React.FC<{ plan: RoutePlanContent }> = ({ plan }) => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mt-3">
         <DetailList title="Assumptions" items={plan.assumptions} />
         <DetailList title="Key Disconnections" items={plan.key_disconnections} />
-        <DetailList title="Next Checks" items={plan.next_checks} />
+        <DetailList title="Questions to Evaluate" items={plan.questions_to_evaluate} />
       </div>
     </details>
   );

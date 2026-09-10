@@ -92,7 +92,7 @@ class RoutePlanContent(BaseModel):
     key_disconnections: list[str] = Field(default_factory=list)
     proposed_starting_materials: list[str] = Field(default_factory=list)
     key_risks: list[str] = Field(default_factory=list)
-    next_checks: list[str] = Field(default_factory=list)
+    questions_to_evaluate: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
 
 
@@ -184,7 +184,7 @@ Requirements:
    from multiple template routes.
 5. Do not invent reaction conditions, yields, mechanisms, literature support,
    or purchasability claims that are not in the provided context.
-6. For each route, explain the main rationale, key risks, and next checks.
+6. For each route, explain the main rationale, key risks, and questions to evaluate.
 7. For each route, list source_route_numbers using the route numbers from the
    evidence, such as [1] or [1, 3].
 8. If proposing a new route, explain what template-route evidence inspired it.
@@ -1019,8 +1019,10 @@ def format_candidate_route_plan(
         )
     if plan.key_risks:
         lines.append(f"- Key risks: {'; '.join(plan.key_risks)}")
-    if plan.next_checks:
-        lines.append(f"- Next checks: {'; '.join(plan.next_checks)}")
+    if plan.questions_to_evaluate:
+        lines.append(
+            f"- Questions to evaluate: {'; '.join(plan.questions_to_evaluate)}"
+        )
     if plan.assumptions:
         lines.append(f"- Assumptions: {'; '.join(plan.assumptions)}")
     lines.append("- Procedure outline:")
