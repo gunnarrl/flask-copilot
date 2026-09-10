@@ -191,8 +191,10 @@ Requirements:
 3. Each route must be one of: template_based, hybrid, new_proposal.
 4. Use hybrid for routes that change one template route or combine useful ideas
    from multiple template routes.
-5. Do not invent reaction conditions, yields, mechanisms, literature support,
-   or purchasability claims that are not in the provided context.
+5. For hybrid and new_proposal steps without supporting experimental details,
+   provide clearly labeled, chemically informed estimates for reaction conditions,
+   workup, purification, and plausible yield ranges. Do not present estimates as
+   sourced facts or invent literature, patent, or purchasability support.
 6. For each route, explain the main rationale, key risks, and questions to evaluate.
 7. For each route, list source_route_numbers using the route numbers from the
    evidence, such as [1] or [1, 3].
