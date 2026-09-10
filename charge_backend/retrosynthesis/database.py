@@ -62,7 +62,7 @@ REACTIONDB_HANDLE = None
 db_entry_to_reaction: ReactionParserFunction | None = None
 
 
-def _smiles_to_inchi(smiles: str) -> str | None:
+def smiles_to_inchi(smiles: str) -> str | None:
     if Chem is None:
         return None
     mol = Chem.MolFromSmiles(smiles)
@@ -70,6 +70,30 @@ def _smiles_to_inchi(smiles: str) -> str | None:
         return None
     inchi = Chem.MolToInchi(mol)
     return str(inchi)
+
+
+def get_reaction_database() -> tuple[
+    ReactionDatabaseReader, ReactionParserFunction
+] | None:
+    global REACTIONDB_HANDLE
+    global db_entry_to_reaction
+
+    if REACTIONDB_HANDLE is None:
+        if not os.path.exists(REACTIONDB_PATH):
+            return None
+        REACTIONDB_HANDLE = ReactionDatabaseReader(REACTIONDB_PATH)
+
+    if db_entry_to_reaction is None:
+        if not os.path.exists(REACTIONDB_PARSER_PATH):
+            return None
+        parser_module = import_from_path("parse_entry", REACTIONDB_PARSER_PATH)
+        if parser_module is None:
+            return None
+        db_entry_to_reaction = getattr(parser_module, "db_entry_to_reaction", None)
+        if db_entry_to_reaction is None:
+            return None
+
+    return REACTIONDB_HANDLE, db_entry_to_reaction
 
 
 # This function is intended to be a built-in tool for the AI orchestrator
@@ -87,36 +111,23 @@ def query_reaction_database(
     dictionaries for each reaction found. If an error has occurred, returns
     a single entry with an "error" key.
     """
-    # Load state
-    global REACTIONDB_HANDLE
-    global db_entry_to_reaction
-    if REACTIONDB_HANDLE is None:
-        if os.path.exists(REACTIONDB_PATH):
-            REACTIONDB_HANDLE = ReactionDatabaseReader(REACTIONDB_PATH)
-        else:
-            return [dict(error="Cannot load database")]
-    if db_entry_to_reaction is None:
-        if not os.path.exists(REACTIONDB_PARSER_PATH):
-            return [dict(error="Cannot load database")]
-        mod = import_from_path("parse_entry", REACTIONDB_PARSER_PATH)
-        if mod is None:
-            return [dict(error="Cannot load database")]
-        db_entry_to_reaction = mod.db_entry_to_reaction
-        if db_entry_to_reaction is None:
-            return [dict(error="Cannot load database")]
+    database = get_reaction_database()
+    if database is None:
+        return [dict(error="Cannot load database")]
+    database_handle, parser = database
 
-    product_inchi = _smiles_to_inchi(product_smiles)
+    product_inchi = smiles_to_inchi(product_smiles)
     if product_inchi is None:
         return [
             dict(error="Cannot convert SMILES to InChI; the molecule may be invalid")
         ]
 
-    entries = REACTIONDB_HANDLE.get(product_inchi)
+    entries = database_handle.get(product_inchi)
     if not entries:
         return []
 
     # Process database entries
-    processed = [db_entry_to_reaction(product_inchi, entry) for entry in entries]
+    processed = [parser(product_inchi, entry) for entry in entries]
     # Sort entries by ones having a description coming first
     processed_entries = [e for e in processed if e.text] + [
         e for e in processed if not e.text
@@ -170,39 +181,17 @@ async def find_exact_reactions(
     websocket: WebSocket,
     run_settings: FlaskRunSettings,
 ) -> Reaction | None:
-    # Load state
-    global REACTIONDB_HANDLE
-    global db_entry_to_reaction
-    if REACTIONDB_HANDLE is None:
-        if os.path.exists(REACTIONDB_PATH):
-            REACTIONDB_HANDLE = ReactionDatabaseReader(REACTIONDB_PATH)
-        else:
-            await clogger.warning(f"Cannot load database at {REACTIONDB_PATH}")
-            return None
-    if db_entry_to_reaction is None:
-        if not os.path.exists(REACTIONDB_PARSER_PATH):
-            await clogger.warning(
-                f"Database entry parser not found at {REACTIONDB_PARSER_PATH}"
-            )
-            return None
-        mod = import_from_path("parse_entry", REACTIONDB_PARSER_PATH)
-        if mod is None:
-            await clogger.error(
-                f"Cannot import database entry parser at {REACTIONDB_PARSER_PATH}"
-            )
-            return None
-        db_entry_to_reaction = mod.db_entry_to_reaction
-        if db_entry_to_reaction is None:
-            await clogger.error(
-                f"Cannot load database entry parser function at {REACTIONDB_PARSER_PATH}"
-            )
-            return None
+    database = get_reaction_database()
+    if database is None:
+        await clogger.warning("Cannot load reaction database or entry parser")
+        return None
+    database_handle, parser = database
 
-    product_inchi = _smiles_to_inchi(product.smiles)
+    product_inchi = smiles_to_inchi(product.smiles)
     if product_inchi is None:
         return None
 
-    entries = REACTIONDB_HANDLE.get(product_inchi)
+    entries = database_handle.get(product_inchi)
     if not entries:
         return None
 
@@ -213,7 +202,7 @@ async def find_exact_reactions(
     )
 
     # Process database entries
-    processed = [db_entry_to_reaction(product_inchi, entry) for entry in entries]
+    processed = [parser(product_inchi, entry) for entry in entries]
     # Sort entries by ones having a description coming first
     processed_entries = [e for e in processed if e.text] + [
         e for e in processed if not e.text

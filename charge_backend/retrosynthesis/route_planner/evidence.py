@@ -5,30 +5,9 @@
 ## SPDX-License-Identifier: Apache-2.0
 ###############################################################################
 
-import os
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Callable
-
-from charge_backend.moleculedb.dynamic_import import import_from_path
-from charge_backend.moleculedb.reactiondb_query import ReactionDatabaseReader
-
-try:
-    from rdkit import Chem
-except ImportError:
-    Chem = None
-
-REACTIONDB_PATH = os.getenv(
-    "FLASK_REACTION_DB",
-    "/data/db/reactions.db",
-)
-REACTIONDB_PARSER_PATH = os.getenv(
-    "FLASK_REACTION_DB_PARSER",
-    os.path.join(os.path.dirname(REACTIONDB_PATH), "parse_entry.py"),
-)
-REACTIONDB_HANDLE = None
-ReactionEntryParser = Callable[[str, dict[str, Any]], Any]
-db_entry_to_reaction: ReactionEntryParser | None = None
+from typing import Any
 
 
 @dataclass
@@ -42,13 +21,9 @@ class PatentEvidence:
 
 
 def _smiles_to_inchi(smiles: str) -> str | None:
-    if Chem is None:
-        return None
-    mol = Chem.MolFromSmiles(smiles)
-    if not mol:
-        return None
-    inchi = Chem.MolToInchi(mol)
-    return str(inchi)
+    from charge_backend.retrosynthesis.database import smiles_to_inchi
+
+    return smiles_to_inchi(smiles)
 
 
 def _component_inchi(component: dict[str, Any]) -> str | None:
@@ -66,28 +41,23 @@ def find_step_evidence(
     precursors: list[str],
     limit: int = 3,
 ) -> list[PatentEvidence]:
+    from charge_backend.retrosynthesis.database import get_reaction_database
+
     product_inchi = _smiles_to_inchi(product)
 
     if not product_inchi:
         return []
 
-    global REACTIONDB_HANDLE
-    global db_entry_to_reaction
-    if REACTIONDB_HANDLE is None:
-        if os.path.exists(REACTIONDB_PATH):
-            REACTIONDB_HANDLE = ReactionDatabaseReader(REACTIONDB_PATH)
-        else:
-            return []
+    database = get_reaction_database()
+    if database is None:
+        return []
+    database_handle, parser = database
 
-    entries = REACTIONDB_HANDLE.get(product_inchi)
+    entries = database_handle.get(product_inchi)
     if not entries:
         return []
 
-    if db_entry_to_reaction is None:
-        parser_module = import_from_path("parse_entry", REACTIONDB_PARSER_PATH)
-        db_entry_to_reaction = parser_module.db_entry_to_reaction
-
-    parsed_entries = [db_entry_to_reaction(product_inchi, entry) for entry in entries]
+    parsed_entries = [parser(product_inchi, entry) for entry in entries]
     return evidence_from_entries(parsed_entries, precursors, limit)
 
 
@@ -98,7 +68,9 @@ def evidence_from_entries(
 ) -> list[PatentEvidence]:
     res = []
     precursor_counts = Counter(
-        inchi for precursor in precursors if (inchi := _smiles_to_inchi(precursor))
+        inchi
+        for precursor in precursors
+        if (inchi := _smiles_to_inchi(precursor))
     )
     if len(precursor_counts) != len(precursors):
         return []
